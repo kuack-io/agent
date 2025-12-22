@@ -1,0 +1,4 @@
+skip-path:
+
+skip-check:
+  - CKV_DOCKER_2
