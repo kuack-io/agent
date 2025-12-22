@@ -14,7 +14,7 @@
         "format": "prettier --write \"src/**/*.{ts,tsx,js,jsx,json,css,md}\""
     },
     "dependencies": {
-        "@bytecodealliance/preview2-shim": "^0.16.0"
+        "@bytecodealliance/preview2-shim": "^0.17.5"
     },
     "devDependencies": {
         "@eslint/js": "^9.39.2",
