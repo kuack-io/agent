@@ -1,3 +1,9 @@
+## [1.0.2](https://github.com/kuack-io/agent/compare/v1.0.1...1.0.2) (2025-12-22)
+
+### Bug Fixes
+
+* remove v from version ([0727a0b](https://github.com/kuack-io/agent/commit/0727a0bdb081dac30f62b666e84827fa86e88a31))
+
 ## [1.0.1](https://github.com/kuack-io/agent/compare/v1.0.0...v1.0.1) (2025-12-22)
 
 ### Dependencies
