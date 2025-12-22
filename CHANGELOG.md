@@ -1,3 +1,11 @@
+## [1.0.1](https://github.com/kuack-io/agent/compare/v1.0.0...v1.0.1) (2025-12-22)
+
+### Dependencies
+
+* **deps:** bump actions/cache from 4 to 5 ([ae5d1c5](https://github.com/kuack-io/agent/commit/ae5d1c5dda8e19aeb48cab881f95b02583de5aee))
+* **deps:** bump actions/setup-node from 4 to 6 ([6f4f7c8](https://github.com/kuack-io/agent/commit/6f4f7c8b26c488f85bf205e69e090014b8538961))
+* **deps:** bump docker/build-push-action from 5 to 6 ([bf95f6d](https://github.com/kuack-io/agent/commit/bf95f6d1e02245d9157b503b51f6495c11feac24))
+
 ## 1.0.0 (2025-12-22)
 
 ### Features
