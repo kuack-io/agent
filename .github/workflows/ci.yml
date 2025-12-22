@@ -16,7 +16,7 @@ jobs:
   pre-commit:
     name: Pre-commit
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') # runs on main to update the cache used in PRs
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -38,7 +38,7 @@ jobs:
 
   install-deps:
     name: Install Dependencies
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest # runs in PRs, merge queues and on main
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -63,7 +63,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     needs: install-deps
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -86,7 +86,7 @@ jobs:
     name: Type Check
     runs-on: ubuntu-latest
     needs: install-deps
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -109,7 +109,7 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     needs: install-deps
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -132,7 +132,7 @@ jobs:
     name: Build Check
     runs-on: ubuntu-latest
     needs: install-deps
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -155,7 +155,7 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     needs: install-deps
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -184,7 +184,7 @@ jobs:
     name: Audit
     runs-on: ubuntu-latest
     needs: install-deps
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' # only run on PRs
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -206,7 +206,7 @@ jobs:
   ci-passed:
     name: CI Passed
     runs-on: ubuntu-latest
-    if: always() && github.event_name == 'pull_request'
+    if: always() && github.event_name == 'pull_request' # only run on PRs
     needs: [pre-commit, lint, type-check, test, build-check, format, audit]
     steps:
       - name: Check status of all required jobs
