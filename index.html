@@ -10,16 +10,17 @@
       max-width: 800px;
       margin: 50px auto;
       padding: 20px;
-      background: #f5f5f5;
+      background: #1a1a1a;
+      color: #e0e0e0;
     }
     .container {
-      background: white;
+      background: #2d2d2d;
       padding: 30px;
       border-radius: 8px;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      box-shadow: 0 2px 4px rgba(0,0,0,0.3);
     }
     h1 {
-      color: #333;
+      color: #ffffff;
       margin-top: 0;
     }
     .status {
@@ -28,9 +29,9 @@
       border-radius: 4px;
       font-weight: 500;
     }
-    .status.disconnected { background: #fee; color: #c33; }
-    .status.connecting { background: #ffc; color: #990; }
-    .status.connected { background: #efe; color: #3c3; }
+    .status.disconnected { background: #4a1f1f; color: #ff6b6b; }
+    .status.connecting { background: #4a3f1f; color: #ffd93d; }
+    .status.connected { background: #1f4a2f; color: #6bcf7f; }
     button {
       background: #0066cc;
       color: white;
@@ -43,32 +44,41 @@
     }
     button:hover { background: #0052a3; }
     button:disabled {
-      background: #ccc;
+      background: #555;
+      color: #888;
       cursor: not-allowed;
     }
     .info {
       margin: 20px 0;
       font-size: 14px;
-      color: #666;
+      color: #b0b0b0;
     }
     .info label {
       font-weight: 600;
       display: inline-block;
       width: 120px;
+      color: #e0e0e0;
     }
     input {
       padding: 8px;
-      border: 1px solid #ddd;
+      border: 1px solid #555;
       border-radius: 4px;
       width: 400px;
       font-size: 14px;
+      background: #1a1a1a;
+      color: #e0e0e0;
+    }
+    input:focus {
+      outline: none;
+      border-color: #0066cc;
     }
     .warning {
-      background: #fff3cd;
+      background: #4a3f1f;
       border: 1px solid #ffc107;
       padding: 15px;
       border-radius: 4px;
       margin: 20px 0;
+      color: #ffd93d;
     }
   </style>
 </head>

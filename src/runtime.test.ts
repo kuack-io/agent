@@ -182,6 +182,14 @@ describe("Runtime", () => {
       expectedWasmUrl.searchParams.set("variant", "browser");
 
       expect(global.fetch).toHaveBeenCalledWith(expectedWasmUrl.toString());
+
+      const expectedJsUrl = new URL(registryProxyUrl);
+      const expectedJsPath = "/custom/module.wasm".replace(/_bg\.wasm$/, ".js");
+      expectedJsUrl.searchParams.set("image", specWithHints.spec.containers[0].image);
+      expectedJsUrl.searchParams.set("path", expectedJsPath);
+      expectedJsUrl.searchParams.set("variant", "browser");
+
+      expect(global.fetch).toHaveBeenCalledWith(expectedJsUrl.toString());
     });
 
     it("should handle pod with no containers", async () => {
