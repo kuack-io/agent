@@ -1,3 +1,9 @@
+## [1.1.0](https://github.com/kuack-io/agent/compare/1.0.2...1.1.0) (2025-12-24)
+
+### Features
+
+* dark theme ([90d8a02](https://github.com/kuack-io/agent/commit/90d8a02921373305258a7fa461ea3d825cfd296e))
+
 ## [1.0.2](https://github.com/kuack-io/agent/compare/v1.0.1...1.0.2) (2025-12-22)
 
 ### Bug Fixes
