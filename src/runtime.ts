@@ -62,6 +62,48 @@ export class Runtime {
         throw new Error("No containers specified");
       }
 
+      // Auto-discovery of WASM path
+      // We always attempt to discover the path from package.json as it's the standard for wasm-pack
+      try {
+        const imageRef = container.wasm?.image ?? container.image;
+        console.log(`[Runtime] Discovering WASM path from pkg/package.json for ${imageRef}`);
+
+        const pkgJsonStr = await this.downloadFile(imageRef, "pkg/package.json", container.wasm?.variant);
+        const pkgJson = JSON.parse(pkgJsonStr);
+
+        if (pkgJson.main && typeof pkgJson.main === "string") {
+          const mainJs = pkgJson.main;
+          const wasmFilename = mainJs.replace(/\.js$/, "_bg.wasm");
+          const wasmPath = `pkg/${wasmFilename}`;
+
+          console.log(`[Runtime] Discovered WASM path: ${wasmPath}`);
+
+          if (!container.wasm) container.wasm = {};
+          container.wasm.path = wasmPath;
+        }
+      } catch (err) {
+        console.warn(`[Runtime] Failed to discover WASM path: ${err}`);
+
+        // Fallback: If discovery fails, try to construct a path based on the image name
+        // This helps if package.json is missing or inaccessible but the structure is standard.
+        if (!container.wasm?.path) {
+          const imageRef = container.wasm?.image ?? container.image;
+          // Extract name from image ref (e.g. ghcr.io/kuack-io/checker:latest -> checker)
+          const match = imageRef.match(/\/([^/:]+)(?::.+)?$/);
+          if (match && match[1]) {
+            const name = match[1]; // e.g. "checker" or "kuack-checker"
+            // Convert dashes to underscores for rust/wasm conventions
+            const snakeName = name.replace(/-/g, "_");
+            // Try the most likely path
+            const fallbackPath = `pkg/${snakeName}_bg.wasm`;
+            console.log(`[Runtime] Using fallback WASM path derived from image name: ${fallbackPath}`);
+
+            if (!container.wasm) container.wasm = {};
+            container.wasm.path = fallbackPath;
+          }
+        }
+      }
+
       // Download WASM module from registry proxy
       const wasmBytes = await this.downloadWASM(container);
 
@@ -117,6 +159,33 @@ export class Runtime {
     }
   }
 
+  private async downloadFile(imageRef: string, path: string, variant?: string): Promise<string> {
+    const url = this.buildRegistryUrl();
+    url.searchParams.set("image", imageRef);
+    url.searchParams.set("path", path);
+    if (variant) {
+      url.searchParams.set("variant", variant);
+    }
+
+    console.log(`[Runtime] Downloading file ${path} from ${url.toString()}`);
+
+    const response = await fetch(url.toString());
+
+    if (!response.ok) {
+      // Try to read error text if available
+      let errorText = response.statusText;
+      try {
+        const text = await response.text();
+        if (text) errorText = `${response.statusText}: ${text}`;
+      } catch {
+        // ignore
+      }
+      throw new Error(`Failed to download file ${path}: ${response.status} ${errorText}`);
+    }
+
+    return await response.text();
+  }
+
   private async downloadWASM(container: ContainerSpec): Promise<Uint8Array> {
     const url = this.buildRegistryUrl();
     const imageRef = container.wasm?.image ?? container.image;
@@ -133,7 +202,15 @@ export class Runtime {
     const response = await fetch(url.toString());
 
     if (!response.ok) {
-      throw new Error(`Failed to download WASM: ${response.status} ${response.statusText}`);
+      // Try to read error text if available
+      let errorText = response.statusText;
+      try {
+        const text = await response.text();
+        if (text) errorText = `${response.statusText}: ${text}`;
+      } catch {
+        // ignore
+      }
+      throw new Error(`Failed to download WASM: ${response.status} ${errorText}`);
     }
 
     const arrayBuffer = await response.arrayBuffer();

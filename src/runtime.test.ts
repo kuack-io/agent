@@ -19,8 +19,13 @@ global.URL.revokeObjectURL = vi.fn();
 // Mock fetch
 global.fetch = vi.fn();
 
-// Helper to setup dual WASM+JS fetch mocks
-function setupWasmJsFetchMock(wasmBytes: Uint8Array, jsCode: string) {
+// Helper to setup package.json + WASM + JS fetch mocks
+function setupWasmJsFetchMock(wasmBytes: Uint8Array, jsCode: string, packageJson?: string) {
+  const mockPackageJsonResponse = {
+    ok: true,
+    text: vi.fn().mockResolvedValue(packageJson || JSON.stringify({ main: "test.js" })),
+  };
+
   const mockWasmResponse = {
     ok: true,
     arrayBuffer: vi.fn().mockResolvedValue(wasmBytes.buffer),
@@ -31,8 +36,9 @@ function setupWasmJsFetchMock(wasmBytes: Uint8Array, jsCode: string) {
     text: vi.fn().mockResolvedValue(jsCode),
   };
 
-  // Use mockResolvedValueOnce to properly alternate between WASM and JS responses
+  // Use mockResolvedValueOnce to properly alternate between package.json, WASM and JS responses
   vi.mocked(global.fetch)
+    .mockResolvedValueOnce(mockPackageJsonResponse as unknown as Response)
     .mockResolvedValueOnce(mockWasmResponse as unknown as Response)
     .mockResolvedValueOnce(mockJsResponse as unknown as Response);
 }
@@ -94,10 +100,17 @@ describe("Runtime", () => {
         text: vi.fn().mockResolvedValue(jsCode),
       };
 
-      // Mock fetch to return different responses for WASM and JS
+      // Mock fetch to return different responses for package.json, WASM and JS
+      const mockPackageJsonResponse = {
+        ok: true,
+        text: vi.fn().mockResolvedValue(JSON.stringify({ main: "test.js" })),
+      };
+
       vi.mocked(global.fetch).mockImplementation((url) => {
         const urlStr = url.toString();
-        if (urlStr.includes(".wasm")) {
+        if (urlStr.includes("package.json")) {
+          return Promise.resolve(mockPackageJsonResponse as unknown as Response);
+        } else if (urlStr.includes(".wasm")) {
           return Promise.resolve(mockWasmResponse as unknown as Response);
         } else if (urlStr.includes(".js")) {
           return Promise.resolve(mockJsResponse as unknown as Response);
@@ -444,6 +457,342 @@ describe("Runtime", () => {
 
       // Verify execution happened
       expect(mockMainFunc).toHaveBeenCalled();
+    });
+
+    it("should auto-discover WASM path from package.json", async () => {
+      const wasmBytes = new Uint8Array([0, 97, 115, 109]);
+      const jsCode = "export default function() {}";
+
+      // Pod spec without wasm.path - should trigger auto-discovery
+      const podSpecWithoutPath: PodSpec = {
+        metadata: {
+          name: "test-pod",
+          namespace: "default",
+        },
+        spec: {
+          containers: [
+            {
+              name: "test-container",
+              image: "test-image:latest",
+            },
+          ],
+        },
+      };
+
+      const packageJson = JSON.stringify({ main: "test_module.js" });
+      const mockPackageJsonResponse = {
+        ok: true,
+        text: vi.fn().mockResolvedValue(packageJson),
+      };
+
+      const mockWasmResponse = {
+        ok: true,
+        arrayBuffer: vi.fn().mockResolvedValue(wasmBytes.buffer),
+      };
+
+      const mockJsResponse = {
+        ok: true,
+        text: vi.fn().mockResolvedValue(jsCode),
+      };
+
+      vi.mocked(global.fetch).mockImplementation((url) => {
+        const urlStr = url.toString();
+        if (urlStr.includes("package.json")) {
+          return Promise.resolve(mockPackageJsonResponse as unknown as Response);
+        } else if (urlStr.includes(".wasm")) {
+          return Promise.resolve(mockWasmResponse as unknown as Response);
+        } else if (urlStr.includes(".js")) {
+          return Promise.resolve(mockJsResponse as unknown as Response);
+        }
+        return Promise.reject(new Error("Unexpected fetch"));
+      });
+
+      const statusCallback = vi.fn();
+      const logCallback = vi.fn();
+
+      await runtime.executePod(podSpecWithoutPath, statusCallback, logCallback);
+
+      // Verify package.json was downloaded
+      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("package.json"));
+
+      // Verify WASM was downloaded with discovered path (URL-encoded)
+      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("test_module_bg.wasm"));
+
+      // Verify execution succeeded
+      expect(statusCallback).toHaveBeenCalledWith({
+        phase: "Succeeded",
+        message: "WASM execution completed",
+      });
+    });
+
+    it("should use fallback path when package.json discovery fails", async () => {
+      const wasmBytes = new Uint8Array([0, 97, 115, 109]);
+      const jsCode = "export default function() {}";
+
+      // Pod spec without wasm.path - should trigger auto-discovery, then fallback
+      const podSpecWithoutPath: PodSpec = {
+        metadata: {
+          name: "test-pod",
+          namespace: "default",
+        },
+        spec: {
+          containers: [
+            {
+              name: "test-container",
+              image: "ghcr.io/kuack-io/checker:latest",
+            },
+          ],
+        },
+      };
+
+      // Mock package.json download to fail
+      const mockPackageJsonResponse = {
+        ok: false,
+        status: 404,
+        statusText: "Not Found",
+        text: vi.fn().mockResolvedValue(""),
+      };
+
+      const mockWasmResponse = {
+        ok: true,
+        arrayBuffer: vi.fn().mockResolvedValue(wasmBytes.buffer),
+      };
+
+      const mockJsResponse = {
+        ok: true,
+        text: vi.fn().mockResolvedValue(jsCode),
+      };
+
+      vi.mocked(global.fetch).mockImplementation((url) => {
+        const urlStr = url.toString();
+        if (urlStr.includes("package.json")) {
+          return Promise.resolve(mockPackageJsonResponse as unknown as Response);
+        } else if (urlStr.includes(".wasm")) {
+          return Promise.resolve(mockWasmResponse as unknown as Response);
+        } else if (urlStr.includes(".js")) {
+          return Promise.resolve(mockJsResponse as unknown as Response);
+        }
+        return Promise.reject(new Error("Unexpected fetch"));
+      });
+
+      const statusCallback = vi.fn();
+      const logCallback = vi.fn();
+
+      await runtime.executePod(podSpecWithoutPath, statusCallback, logCallback);
+
+      // Verify package.json download was attempted
+      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("package.json"));
+
+      // Verify WASM was downloaded with fallback path (checker -> checker_bg.wasm)
+      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("checker_bg.wasm"));
+
+      // Verify execution succeeded
+      expect(statusCallback).toHaveBeenCalledWith({
+        phase: "Succeeded",
+        message: "WASM execution completed",
+      });
+    });
+
+    it("should convert dashes to underscores in fallback path", async () => {
+      const wasmBytes = new Uint8Array([0, 97, 115, 109]);
+      const jsCode = "export default function() {}";
+
+      // Pod spec with image name containing dashes (needs / for regex to match)
+      const podSpecWithoutPath: PodSpec = {
+        metadata: {
+          name: "test-pod",
+          namespace: "default",
+        },
+        spec: {
+          containers: [
+            {
+              name: "test-container",
+              image: "registry.io/kuack-checker:latest",
+            },
+          ],
+        },
+      };
+
+      // Mock package.json download to fail
+      const mockPackageJsonResponse = {
+        ok: false,
+        status: 404,
+        statusText: "Not Found",
+        text: vi.fn().mockResolvedValue(""),
+      };
+
+      const mockWasmResponse = {
+        ok: true,
+        arrayBuffer: vi.fn().mockResolvedValue(wasmBytes.buffer),
+      };
+
+      const mockJsResponse = {
+        ok: true,
+        text: vi.fn().mockResolvedValue(jsCode),
+      };
+
+      vi.mocked(global.fetch).mockImplementation((url) => {
+        const urlStr = url.toString();
+        if (urlStr.includes("package.json")) {
+          return Promise.resolve(mockPackageJsonResponse as unknown as Response);
+        } else if (urlStr.includes(".wasm")) {
+          return Promise.resolve(mockWasmResponse as unknown as Response);
+        } else if (urlStr.includes(".js")) {
+          return Promise.resolve(mockJsResponse as unknown as Response);
+        }
+        return Promise.reject(new Error("Unexpected fetch"));
+      });
+
+      const statusCallback = vi.fn();
+      const logCallback = vi.fn();
+
+      await runtime.executePod(podSpecWithoutPath, statusCallback, logCallback);
+
+      // Verify package.json download was attempted
+      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("package.json"));
+
+      // Verify WASM was downloaded with fallback path (kuack-checker -> kuack_checker_bg.wasm)
+      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("kuack_checker_bg.wasm"));
+
+      // Verify execution succeeded
+      expect(statusCallback).toHaveBeenCalledWith({
+        phase: "Succeeded",
+        message: "WASM execution completed",
+      });
+    });
+
+    it("should use wasm.image if provided for path discovery", async () => {
+      const wasmBytes = new Uint8Array([0, 97, 115, 109]);
+      const jsCode = "export default function() {}";
+
+      // Pod spec with wasm.image different from container.image
+      const podSpecWithWasmImage: PodSpec = {
+        metadata: {
+          name: "test-pod",
+          namespace: "default",
+        },
+        spec: {
+          containers: [
+            {
+              name: "test-container",
+              image: "base-image:latest",
+              wasm: {
+                image: "wasm-image:latest",
+              },
+            },
+          ],
+        },
+      };
+
+      const packageJson = JSON.stringify({ main: "module.js" });
+      const mockPackageJsonResponse = {
+        ok: true,
+        text: vi.fn().mockResolvedValue(packageJson),
+      };
+
+      const mockWasmResponse = {
+        ok: true,
+        arrayBuffer: vi.fn().mockResolvedValue(wasmBytes.buffer),
+      };
+
+      const mockJsResponse = {
+        ok: true,
+        text: vi.fn().mockResolvedValue(jsCode),
+      };
+
+      vi.mocked(global.fetch).mockImplementation((url) => {
+        const urlStr = url.toString();
+        if (urlStr.includes("package.json")) {
+          return Promise.resolve(mockPackageJsonResponse as unknown as Response);
+        } else if (urlStr.includes(".wasm")) {
+          return Promise.resolve(mockWasmResponse as unknown as Response);
+        } else if (urlStr.includes(".js")) {
+          return Promise.resolve(mockJsResponse as unknown as Response);
+        }
+        return Promise.reject(new Error("Unexpected fetch"));
+      });
+
+      const statusCallback = vi.fn();
+      const logCallback = vi.fn();
+
+      await runtime.executePod(podSpecWithWasmImage, statusCallback, logCallback);
+
+      // Verify package.json was downloaded using wasm.image
+      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("image=wasm-image%3Alatest"));
+
+      // Verify WASM was downloaded using wasm.image
+      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("image=wasm-image%3Alatest"));
+
+      // Verify execution succeeded
+      expect(statusCallback).toHaveBeenCalledWith({
+        phase: "Succeeded",
+        message: "WASM execution completed",
+      });
+    });
+
+    it("should propagate wasm.variant to package.json download", async () => {
+      const wasmBytes = new Uint8Array([0, 97, 115, 109]);
+      const jsCode = "export default function() {}";
+
+      const podSpecWithVariant: PodSpec = {
+        metadata: {
+          name: "test-pod",
+          namespace: "default",
+        },
+        spec: {
+          containers: [
+            {
+              name: "test-container",
+              image: "test-image:latest",
+              wasm: {
+                variant: "browser",
+              },
+            },
+          ],
+        },
+      };
+
+      const packageJson = JSON.stringify({ main: "test.js" });
+      const mockPackageJsonResponse = {
+        ok: true,
+        text: vi.fn().mockResolvedValue(packageJson),
+      };
+
+      const mockWasmResponse = {
+        ok: true,
+        arrayBuffer: vi.fn().mockResolvedValue(wasmBytes.buffer),
+      };
+
+      const mockJsResponse = {
+        ok: true,
+        text: vi.fn().mockResolvedValue(jsCode),
+      };
+
+      vi.mocked(global.fetch).mockImplementation((url) => {
+        const urlStr = url.toString();
+        if (urlStr.includes("package.json")) {
+          return Promise.resolve(mockPackageJsonResponse as unknown as Response);
+        } else if (urlStr.includes(".wasm")) {
+          return Promise.resolve(mockWasmResponse as unknown as Response);
+        } else if (urlStr.includes(".js")) {
+          return Promise.resolve(mockJsResponse as unknown as Response);
+        }
+        return Promise.reject(new Error("Unexpected fetch"));
+      });
+
+      const statusCallback = vi.fn();
+      const logCallback = vi.fn();
+
+      await runtime.executePod(podSpecWithVariant, statusCallback, logCallback);
+
+      // Verify variant was passed to package.json download
+      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("variant=browser"));
+
+      // Verify execution succeeded
+      expect(statusCallback).toHaveBeenCalledWith({
+        phase: "Succeeded",
+        message: "WASM execution completed",
+      });
     });
   });
 
