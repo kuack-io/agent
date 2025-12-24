@@ -68,7 +68,7 @@ export class Runtime {
       // Download JS glue code for wasm-bindgen modules
       const imageRef = container.wasm?.image ?? container.image;
       const wasmPath = container.wasm?.path || "";
-      const jsCode = await this.downloadJS(wasmPath, imageRef);
+      const jsCode = await this.downloadJS(wasmPath, imageRef, container.wasm?.variant);
 
       onStatus({
         phase: "Running",
@@ -140,13 +140,16 @@ export class Runtime {
     return new Uint8Array(arrayBuffer);
   }
 
-  private async downloadJS(wasmPath: string, imageRef: string): Promise<string> {
+  private async downloadJS(wasmPath: string, imageRef: string, variant?: string): Promise<string> {
     // Derive JS path from WASM path (e.g., /pkg/module_bg.wasm -> /pkg/module.js)
     const jsPath = wasmPath.replace(/_bg\.wasm$/, ".js");
 
     const url = this.buildRegistryUrl();
     url.searchParams.set("image", imageRef);
     url.searchParams.set("path", jsPath);
+    if (variant) {
+      url.searchParams.set("variant", variant);
+    }
 
     console.log(`[Runtime] Downloading JS glue code from ${url.toString()}`);
 
