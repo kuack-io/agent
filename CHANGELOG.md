@@ -1,3 +1,9 @@
+## [1.2.0](https://github.com/kuack-io/agent/compare/1.1.0...1.2.0) (2025-12-24)
+
+### Features
+
+* package discovery ([4ff7652](https://github.com/kuack-io/agent/commit/4ff76526437767cd90f1e1c03af7b0a113814247))
+
 ## [1.1.0](https://github.com/kuack-io/agent/compare/1.0.2...1.1.0) (2025-12-24)
 
 ### Features
