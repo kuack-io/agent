@@ -1,3 +1,9 @@
+## [1.3.0](https://github.com/kuack-io/agent/compare/1.2.0...1.3.0) (2025-12-27)
+
+### Features
+
+* refactor, token support, better ui ([df8a79c](https://github.com/kuack-io/agent/commit/df8a79c684902ac64efef53c5b88b7ab374a0e15))
+
 ## [1.2.0](https://github.com/kuack-io/agent/compare/1.1.0...1.2.0) (2025-12-24)
 
 ### Features
