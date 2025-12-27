@@ -1,4 +1,3 @@
 *
 !dist/
-!default.conf
-!index.html
+!static/

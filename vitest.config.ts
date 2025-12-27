@@ -18,6 +18,7 @@ export default defineConfig({
         'setupTests.ts',
         '**/*.test.ts',
         '**/*.spec.ts',
+        '**/testUtils.ts',
       ],
     },
   },

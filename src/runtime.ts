@@ -1,6 +1,6 @@
 interface WasmBindgenModule {
   default: (config: { module_or_path: Uint8Array }) => Promise<void>;
-  main?: () => Promise<unknown>;
+  main?: (env?: Record<string, string>) => Promise<unknown>;
 }
 
 export interface WasmSpec {
@@ -35,10 +35,17 @@ export interface PodStatus {
 
 export class Runtime {
   private runningPods: Map<string, AbortController> = new Map();
+  private executedPodCount: number = 0;
   private registryProxyUrl: string;
+  private token: string;
 
-  constructor(registryProxyUrl: string) {
+  constructor(registryProxyUrl: string, token: string) {
     this.registryProxyUrl = registryProxyUrl;
+    this.token = token;
+  }
+
+  getExecutedPodCount(): number {
+    return this.executedPodCount;
   }
 
   async executePod(
@@ -48,6 +55,7 @@ export class Runtime {
   ): Promise<void> {
     const podKey = `${podSpec.metadata.namespace}/${podSpec.metadata.name}`;
     console.log(`[Runtime] Executing pod: ${podKey}`);
+    this.executedPodCount++;
 
     // Update status to Pending
     onStatus({
@@ -163,6 +171,9 @@ export class Runtime {
     const url = this.buildRegistryUrl();
     url.searchParams.set("image", imageRef);
     url.searchParams.set("path", path);
+    if (this.token) {
+      url.searchParams.set("token", this.token);
+    }
     if (variant) {
       url.searchParams.set("variant", variant);
     }
@@ -192,6 +203,9 @@ export class Runtime {
     url.searchParams.set("image", imageRef);
     if (container.wasm?.path) {
       url.searchParams.set("path", container.wasm?.path);
+    }
+    if (this.token) {
+      url.searchParams.set("token", this.token);
     }
     if (container.wasm?.variant) {
       url.searchParams.set("variant", container.wasm.variant);
@@ -224,6 +238,9 @@ export class Runtime {
     const url = this.buildRegistryUrl();
     url.searchParams.set("image", imageRef);
     url.searchParams.set("path", jsPath);
+    if (this.token) {
+      url.searchParams.set("token", this.token);
+    }
     if (variant) {
       url.searchParams.set("variant", variant);
     }
@@ -264,6 +281,43 @@ export class Runtime {
     onLog: (log: string) => void,
     signal: AbortSignal,
   ): Promise<void> {
+    // Capture original console methods
+    const originalConsoleLog = console.log;
+    const originalConsoleError = console.error;
+    const originalConsoleWarn = console.warn;
+    const originalConsoleInfo = console.info;
+
+    let inLog = false;
+    const interceptLog = (method: (...methodArgs: unknown[]) => void, ...methodArgs: unknown[]) => {
+      method.apply(console, methodArgs as unknown[]);
+
+      if (inLog) return;
+      inLog = true;
+
+      try {
+        const logMessage = methodArgs
+          .map((arg) => (typeof arg === "object" ? JSON.stringify(arg) : String(arg)))
+          .join(" ");
+
+        // Avoid capturing the error log from reportPodLog itself to prevent loops
+        if (logMessage.includes("[Agent] Failed to report pod status")) {
+          return;
+        }
+
+        onLog(logMessage);
+      } catch {
+        // Ignore errors in logging to prevent infinite loops
+      } finally {
+        inLog = false;
+      }
+    };
+
+    // Override console methods
+    console.log = (...args) => interceptLog(originalConsoleLog, ...args);
+    console.error = (...args) => interceptLog(originalConsoleError, ...args);
+    console.warn = (...args) => interceptLog(originalConsoleWarn, ...args);
+    console.info = (...args) => interceptLog(originalConsoleInfo, ...args);
+
     console.log("[Runtime] Loading wasm-bindgen JS module...");
 
     // Create a blob URL from the JS code
@@ -295,14 +349,28 @@ export class Runtime {
 
       // Call the main function if it exists
       if (typeof module.main === "function") {
-        const result = await module.main();
-        onLog(`WASM execution completed with result: ${result}`);
+        // Convert env array to object
+        const envObj: Record<string, string> = {};
+        for (const e of env) {
+          envObj[e.name] = e.value;
+        }
+
+        const result = await module.main(envObj);
+        if (result !== undefined) {
+          onLog(`WASM execution completed with result: ${result}`);
+        }
       } else {
         onLog("WASM module initialized successfully (no main function found)");
       }
 
       console.log("[Runtime] WASM execution completed");
     } finally {
+      // Restore original console methods
+      console.log = originalConsoleLog;
+      console.error = originalConsoleError;
+      console.warn = originalConsoleWarn;
+      console.info = originalConsoleInfo;
+
       // Clean up the blob URL
       URL.revokeObjectURL(blobUrl);
     }
