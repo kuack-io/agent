@@ -1,3 +1,0 @@
-misconfigurations:
-  # The HEALTHCHECK docker feature is replaced with explicit checks on the kube deployment
-  - id: AVD-DS-0026

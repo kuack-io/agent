@@ -15,6 +15,7 @@ export interface RegisterData {
   memory: string;
   gpu: boolean;
   labels: Record<string, string>;
+  token: string;
 }
 
 export type ConnectionState = "disconnected" | "connecting" | "connected" | "reconnecting";
@@ -24,6 +25,7 @@ export class Connection {
   private uuid: string;
   private browserId: string;
   private serverUrl: string;
+  private token: string;
   private reconnectDelay = 200;
   private maxReconnectDelay = 3000;
   private heartbeatInterval: number;
@@ -38,14 +40,16 @@ export class Connection {
     cpu: string;
     memory: string;
     gpu: boolean;
+    labels: Record<string, string>;
   } | null = null;
 
   // WebSocket close code for duplicate browser connection
   // Using 4001 (in the 4000-4999 range reserved for libraries/frameworks)
   private static readonly CLOSE_CODE_DUPLICATE_BROWSER = 4001;
 
-  constructor(serverUrl: string, heartbeatInterval: number = 15000) {
+  constructor(serverUrl: string, token: string, heartbeatInterval: number = 15000) {
     this.serverUrl = this.convertToWebSocketUrl(serverUrl);
+    this.token = token;
     this.uuid = this.generateUUID();
     this.browserId = this.getOrCreateBrowserId();
     this.heartbeatInterval = heartbeatInterval;
@@ -53,14 +57,16 @@ export class Connection {
 
   private convertToWebSocketUrl(url: string): string {
     // Convert http:// or https:// to ws:// or wss://
-    // Also ensure /ws endpoint is used
-    let wsUrl = url.replace(/^http:/, "ws:").replace(/^https:/, "wss:");
-
-    // Remove trailing slash and ensure /ws endpoint
-    wsUrl = wsUrl.replace(/\/$/, "");
-    if (!wsUrl.endsWith("/ws")) {
-      wsUrl = `${wsUrl}/ws`;
+    // If already ws:// or wss://, keep it as-is
+    let wsUrl = url;
+    if (url.startsWith("http:")) {
+      wsUrl = url.replace(/^http:/, "ws:");
+    } else if (url.startsWith("https:")) {
+      wsUrl = url.replace(/^https:/, "wss:");
     }
+
+    // Remove trailing slash
+    wsUrl = wsUrl.replace(/\/$/, "");
 
     return wsUrl;
   }
@@ -77,7 +83,9 @@ export class Connection {
     try {
       console.log(`[Agent] Connecting to ${this.serverUrl}`);
 
-      // Create WebSocket connection
+      // Create WebSocket connection with custom header for token
+      // Note: WebSocket constructor doesn't support custom headers in browsers
+      // We'll send the token in the first message (register) instead
       this.socket = new WebSocket(this.serverUrl);
 
       // Wait for connection to open
@@ -180,6 +188,7 @@ export class Connection {
       cpu: resources.cpu,
       memory: resources.memory,
       gpu: resources.gpu,
+      labels: resources.labels,
     };
 
     const registerMsg: Message = {
@@ -192,17 +201,18 @@ export class Connection {
         memory: resources.memory,
         gpu: resources.gpu,
         labels: resources.labels,
+        token: this.token,
       } as RegisterData,
     };
 
     await this.sendMessage(registerMsg);
-    console.log("[Agent] Registration sent:", registerMsg.data);
+    console.log("[Agent] Registration sent:", { ...(registerMsg.data as RegisterData), token: "***" });
 
     // Wait for acknowledgment (registered message)
     // The acknowledgment will be handled by the message handler
   }
 
-  private async detectResources() {
+  public async detectResources(silent: boolean = false) {
     // CPU: navigator.hardwareConcurrency returns logical CPU cores available to the browser
     // This represents the number of logical CPU cores on the system
     // IMPORTANT: This is shared across ALL browser tabs/processes, not per-tab
@@ -216,9 +226,11 @@ export class Connection {
     if (!cpuCores || cpuCores < 1) {
       throw new Error("Unable to detect CPU cores - hardwareConcurrency not available");
     }
-    console.log(
-      `[Agent] Detected CPU cores: ${cpuCores} (via navigator.hardwareConcurrency - this is total logical cores, shared across all browser tabs)`,
-    );
+    if (!silent) {
+      console.log(
+        `[Agent] Detected CPU cores: ${cpuCores} (via navigator.hardwareConcurrency - this is total logical cores, shared across all browser tabs)`,
+      );
+    }
 
     // Memory: Try multiple methods to get accurate memory information
     let memoryGB: number | undefined;
@@ -240,9 +252,18 @@ export class Connection {
         // Convert bytes to GB (jsHeapSizeLimit is in bytes)
         // Round to 1 decimal place for accuracy
         memoryGB = Math.round((perfMemory.jsHeapSizeLimit / (1024 * 1024 * 1024)) * 10) / 10;
-        console.log(
-          `[Agent] Detected memory from performance.memory: ${memoryGB}GB (JS heap limit: ${perfMemory.jsHeapSizeLimit} bytes, used: ${perfMemory.usedJSHeapSize || "N/A"}, total: ${perfMemory.totalJSHeapSize || "N/A"})`,
-        );
+        if (!silent) {
+          const limitGB = (perfMemory.jsHeapSizeLimit / (1024 * 1024 * 1024)).toFixed(2);
+          const usedGB = perfMemory.usedJSHeapSize
+            ? (perfMemory.usedJSHeapSize / (1024 * 1024 * 1024)).toFixed(2) + " GB"
+            : "N/A";
+          const totalGB = perfMemory.totalJSHeapSize
+            ? (perfMemory.totalJSHeapSize / (1024 * 1024 * 1024)).toFixed(2) + " GB"
+            : "N/A";
+          console.log(
+            `[Agent] Detected memory from performance.memory: ${memoryGB}GB (JS heap limit: ${limitGB} GB, used: ${usedGB}, total: ${totalGB})`,
+          );
+        }
       }
     }
 
@@ -270,9 +291,11 @@ export class Connection {
           // Some browsers may allow up to 8GB in certain configurations
           memoryGB = 4;
         }
-        console.log(
-          `[Agent] Estimated memory from deviceMemory: ${memoryGB}GB (device total: ${deviceMemory}GB, using conservative browser JS heap limit)`,
-        );
+        if (!silent) {
+          console.log(
+            `[Agent] Estimated memory from deviceMemory: ${memoryGB}GB (device total: ${deviceMemory}GB, using conservative browser JS heap limit)`,
+          );
+        }
       }
     }
 
@@ -356,10 +379,10 @@ export class Connection {
 
   private getBrowserName(): string {
     const userAgent = navigator.userAgent;
-    if (userAgent.includes("Chrome")) return "chrome";
     if (userAgent.includes("Firefox")) return "firefox";
+    if (userAgent.includes("Edge") || userAgent.includes("Edg")) return "edge";
+    if (userAgent.includes("Chrome")) return "chrome";
     if (userAgent.includes("Safari")) return "safari";
-    if (userAgent.includes("Edge")) return "edge";
     return "unknown";
   }
 
@@ -545,7 +568,7 @@ export class Connection {
     return this.uuid;
   }
 
-  getDetectedResources(): { cpu: string; memory: string; gpu: boolean } | null {
+  getDetectedResources(): { cpu: string; memory: string; gpu: boolean; labels: Record<string, string> } | null {
     return this.detectedResources;
   }
 }

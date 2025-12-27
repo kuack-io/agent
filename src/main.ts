@@ -5,10 +5,11 @@ class Agent {
   private connection: Connection;
   private runtime: Runtime;
   private onStateChangeCallback: ((state: ConnectionState) => void) | null = null;
+  private resourceInterval: number | null = null;
 
-  constructor(serverUrl: string, registryProxyUrl: string) {
-    this.connection = new Connection(serverUrl);
-    this.runtime = new Runtime(registryProxyUrl);
+  constructor(serverUrl: string, token: string, registryProxyUrl: string) {
+    this.connection = new Connection(serverUrl, token);
+    this.runtime = new Runtime(registryProxyUrl, token);
 
     // Set up message handler
     this.connection.onMessage(this.handleMessage.bind(this));
@@ -24,10 +25,22 @@ class Agent {
   async start(): Promise<void> {
     console.log("[Agent] Starting Kuack Agent");
     await this.connection.connect();
+
+    // Start periodic resource detection (every 5 seconds)
+    // Silent mode to avoid console spam
+    this.resourceInterval = setInterval(() => {
+      this.connection.detectResources(true).catch(() => {
+        // Silently fail or log only critical errors
+      });
+    }, 5000) as unknown as number;
   }
 
   async stop(): Promise<void> {
     console.log("[Agent] Stopping agent");
+    if (this.resourceInterval) {
+      clearInterval(this.resourceInterval);
+      this.resourceInterval = null;
+    }
     await this.connection.disconnect();
   }
 
@@ -108,6 +121,7 @@ class Agent {
     return {
       uuid: this.connection.getUUID(),
       runningPods: this.runtime.getRunningPodCount(),
+      executedPods: this.runtime.getExecutedPodCount(),
       state: this.connection.getState(),
       cpu: resources?.cpu || null,
       memory: resources?.memory || null,
