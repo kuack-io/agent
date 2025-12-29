@@ -1,3 +1,11 @@
+## [1.3.1](https://github.com/kuack-io/agent/compare/1.3.0...1.3.1) (2025-12-28)
+
+### Dependencies
+
+* **deps-dev:** bump @types/node from 20.19.27 to 25.0.3 ([a600e41](https://github.com/kuack-io/agent/commit/a600e41220901ba769dd26a91725ca1e6ac1a3b1))
+* **deps-dev:** bump @typescript-eslint/parser from 8.50.0 to 8.50.1 ([7d1e9c1](https://github.com/kuack-io/agent/commit/7d1e9c1b45acbec4cb04a9453f4e97346b132dab))
+* **deps-dev:** bump jsdom from 24.1.3 to 27.4.0 ([f80d7d1](https://github.com/kuack-io/agent/commit/f80d7d134a02ec61b5cb360b9ca265b2df844e70))
+
 ## [1.3.0](https://github.com/kuack-io/agent/compare/1.2.0...1.3.0) (2025-12-27)
 
 ### Features
