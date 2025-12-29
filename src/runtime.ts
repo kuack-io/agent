@@ -44,6 +44,17 @@ export class Runtime {
     this.token = token;
   }
 
+  /**
+   * Sanitizes a URL by replacing the token parameter with "***" for logging purposes.
+   */
+  private sanitizeUrlForLogging(url: URL): string {
+    const sanitizedUrl = new URL(url.toString());
+    if (sanitizedUrl.searchParams.has("token")) {
+      sanitizedUrl.searchParams.set("token", "***");
+    }
+    return sanitizedUrl.toString();
+  }
+
   getExecutedPodCount(): number {
     return this.executedPodCount;
   }
@@ -178,7 +189,7 @@ export class Runtime {
       url.searchParams.set("variant", variant);
     }
 
-    console.log(`[Runtime] Downloading file ${path} from ${url.toString()}`);
+    console.log(`[Runtime] Downloading file ${path} from ${this.sanitizeUrlForLogging(url)}`);
 
     const response = await fetch(url.toString());
 
@@ -211,7 +222,7 @@ export class Runtime {
       url.searchParams.set("variant", container.wasm.variant);
     }
 
-    console.log(`[Runtime] Downloading WASM from ${url.toString()}`);
+    console.log(`[Runtime] Downloading WASM from ${this.sanitizeUrlForLogging(url)}`);
 
     const response = await fetch(url.toString());
 
@@ -245,7 +256,7 @@ export class Runtime {
       url.searchParams.set("variant", variant);
     }
 
-    console.log(`[Runtime] Downloading JS glue code from ${url.toString()}`);
+    console.log(`[Runtime] Downloading JS glue code from ${this.sanitizeUrlForLogging(url)}`);
 
     const response = await fetch(url.toString());
 
