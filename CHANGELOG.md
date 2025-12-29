@@ -1,3 +1,9 @@
+## [1.3.2](https://github.com/kuack-io/agent/compare/1.3.1...1.3.2) (2025-12-29)
+
+### Bug Fixes
+
+* sanitize messages ([cf647b5](https://github.com/kuack-io/agent/commit/cf647b5e8350e0575f2eda530888113a54664833))
+
 ## [1.3.1](https://github.com/kuack-io/agent/compare/1.3.0...1.3.1) (2025-12-28)
 
 ### Dependencies
