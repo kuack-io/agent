@@ -1,3 +1,10 @@
+## [1.3.3](https://github.com/kuack-io/agent/compare/1.3.2...1.3.3) (2025-12-29)
+
+### Dependencies
+
+* **deps-dev:** bump @typescript-eslint/eslint-plugin ([b6d67fd](https://github.com/kuack-io/agent/commit/b6d67fd5115ea292b67def3238328ddcbf516c24))
+* **deps-dev:** bump eslint from 8.57.1 to 9.39.2 ([7e4635e](https://github.com/kuack-io/agent/commit/7e4635e30cbe536dc42aff2cea430e52e59ad786))
+
 ## [1.3.2](https://github.com/kuack-io/agent/compare/1.3.1...1.3.2) (2025-12-29)
 
 ### Bug Fixes
