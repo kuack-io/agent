@@ -1,3 +1,11 @@
+## [1.3.4](https://github.com/kuack-io/agent/compare/1.3.3...1.3.4) (2026-01-03)
+
+### Dependencies
+
+* **deps-dev:** bump @trivago/prettier-plugin-sort-imports ([5b7fcd6](https://github.com/kuack-io/agent/commit/5b7fcd607a34379417925ce2f2faeacf11fdd4fe))
+* **deps-dev:** bump @typescript-eslint/parser from 8.50.1 to 8.51.0 ([4eb0fa9](https://github.com/kuack-io/agent/commit/4eb0fa9bcea15c661a3b53ba02a9d81b829db26a))
+* **deps:** bump @bytecodealliance/preview2-shim from 0.17.5 to 0.17.6 ([5982d31](https://github.com/kuack-io/agent/commit/5982d312eb304fe121f7478a5080d3134861c39e))
+
 ## [1.3.3](https://github.com/kuack-io/agent/compare/1.3.2...1.3.3) (2025-12-29)
 
 ### Dependencies
