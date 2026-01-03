@@ -1,3 +1,9 @@
+## [1.3.5](https://github.com/kuack-io/agent/compare/1.3.4...1.3.5) (2026-01-03)
+
+### Dependencies
+
+* **deps-dev:** bump @typescript-eslint/eslint-plugin ([c4c0977](https://github.com/kuack-io/agent/commit/c4c0977708cc357b11e551dcfe8f91b5ba4f4575))
+
 ## [1.3.4](https://github.com/kuack-io/agent/compare/1.3.3...1.3.4) (2026-01-03)
 
 ### Dependencies
