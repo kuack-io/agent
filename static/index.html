@@ -425,6 +425,8 @@
       } else if (serverUrl.startsWith('wss:')) {
         registryUrl = serverUrl.replace(/^wss:\/\//, 'https://');
       }
+      // Remove trailing slash if present to avoid double slashes
+      registryUrl = registryUrl.replace(/\/+$/, '');
       registryUrl += '/registry';
 
       updateConnectionState('connecting');
