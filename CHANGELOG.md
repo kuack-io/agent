@@ -1,3 +1,9 @@
+## [1.3.6](https://github.com/kuack-io/agent/compare/1.3.5...1.3.6) (2026-01-04)
+
+### Bug Fixes
+
+* remove trailing slash in UI ([89e51c5](https://github.com/kuack-io/agent/commit/89e51c57c378de009ce8093b2838f518bd9ee4d7))
+
 ## [1.3.5](https://github.com/kuack-io/agent/compare/1.3.4...1.3.5) (2026-01-03)
 
 ### Dependencies
