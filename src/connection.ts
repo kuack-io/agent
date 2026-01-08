@@ -106,7 +106,6 @@ export class Connection {
           clearTimeout(timeout);
           console.log("[Agent] WebSocket connection established");
           this.hasConnectedOnce = true;
-          this.setState("connected");
           resolve();
         };
 
@@ -165,7 +164,7 @@ export class Connection {
       this.startHeartbeat();
 
       this.isConnecting = false;
-      // State is already set to "connected" in onopen handler
+      this.setState("connected");
     } catch (error) {
       console.error("[Agent] Failed to connect:", error);
       this.socket = null;

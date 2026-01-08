@@ -1,3 +1,5 @@
+import { WASI, File as WasiFile, OpenFile } from "@bjorn3/browser_wasi_shim";
+
 interface WasmBindgenModule {
   default: (config: { module_or_path: Uint8Array }) => Promise<void>;
   main?: (env?: Record<string, string>) => Promise<unknown>;
@@ -7,6 +9,7 @@ export interface WasmSpec {
   path?: string;
   variant?: string;
   image?: string;
+  type?: string;
 }
 
 export interface ContainerSpec {
@@ -81,75 +84,63 @@ export class Runtime {
         throw new Error("No containers specified");
       }
 
-      // Auto-discovery of WASM path
-      // We always attempt to discover the path from package.json as it's the standard for wasm-pack
-      try {
-        const imageRef = container.wasm?.image ?? container.image;
-        console.log(`[Runtime] Discovering WASM path from pkg/package.json for ${imageRef}`);
-
-        const pkgJsonStr = await this.downloadFile(imageRef, "pkg/package.json", container.wasm?.variant);
-        const pkgJson = JSON.parse(pkgJsonStr);
-
-        if (pkgJson.main && typeof pkgJson.main === "string") {
-          const mainJs = pkgJson.main;
-          const wasmFilename = mainJs.replace(/\.js$/, "_bg.wasm");
-          const wasmPath = `pkg/${wasmFilename}`;
-
-          console.log(`[Runtime] Discovered WASM path: ${wasmPath}`);
-
-          if (!container.wasm) container.wasm = {};
-          container.wasm.path = wasmPath;
-        }
-      } catch (err) {
-        console.warn(`[Runtime] Failed to discover WASM path: ${err}`);
-
-        // Fallback: If discovery fails, try to construct a path based on the image name
-        // This helps if package.json is missing or inaccessible but the structure is standard.
-        if (!container.wasm?.path) {
-          const imageRef = container.wasm?.image ?? container.image;
-          // Extract name from image ref (e.g. ghcr.io/kuack-io/checker:latest -> checker)
-          const match = imageRef.match(/\/([^/:]+)(?::.+)?$/);
-          if (match && match[1]) {
-            const name = match[1]; // e.g. "checker" or "kuack-checker"
-            // Convert dashes to underscores for rust/wasm conventions
-            const snakeName = name.replace(/-/g, "_");
-            // Try the most likely path
-            const fallbackPath = `pkg/${snakeName}_bg.wasm`;
-            console.log(`[Runtime] Using fallback WASM path derived from image name: ${fallbackPath}`);
-
-            if (!container.wasm) container.wasm = {};
-            container.wasm.path = fallbackPath;
-          }
-        }
+      // Check for explicit WASM config from Node
+      if (!container.wasm || !container.wasm.path) {
+        throw new Error("Missing WASM configuration (path) in PodSpec. Node should have resolved this.");
       }
+
+      const wasmType = container.wasm.type || "wasi"; // Default to WASI if not specified (though Node should set it)
+      const isWasi = wasmType === "wasi";
+      const wasmPath = container.wasm.path;
+
+      console.log(`[Runtime] Configuration: Type=${wasmType}, Path=${wasmPath}`);
 
       // Download WASM module from registry proxy
       const wasmBytes = await this.downloadWASM(container);
 
-      // Download JS glue code for wasm-bindgen modules
-      const imageRef = container.wasm?.image ?? container.image;
-      const wasmPath = container.wasm?.path || "";
-      const jsCode = await this.downloadJS(wasmPath, imageRef, container.wasm?.variant);
+      // Determine execution mode
+      let jsCode = "";
+      if (!isWasi) {
+        // bindgen mode requires JS glue
+        try {
+          const imageRef = container.wasm?.image ?? container.image;
+          jsCode = await this.downloadJS(wasmPath, imageRef, container.wasm?.variant);
+        } catch (err) {
+          console.error(`[Runtime] Failed to download JS glue for bindgen module: ${err}`);
+          throw new Error(`Failed to download JS glue for bindgen module: ${err}`);
+        }
+      }
 
       onStatus({
         phase: "Running",
-        message: "Executing WASM module",
+        message: isWasi ? "Executing WASI module" : "Executing WASM module (bindgen)",
       });
 
       // Create abort controller for this pod
       const abortController = new AbortController();
       this.runningPods.set(podKey, abortController);
 
-      // Execute WASM
-      await this.executeWASM(
-        wasmBytes,
-        jsCode,
-        container.command || [],
-        container.args || [],
-        container.env || [],
-        onLog,
-        abortController.signal,
-      );
+      if (isWasi) {
+        await this.executeWASI(
+          wasmBytes,
+          container.command || [],
+          container.args || [],
+          container.env || [],
+          onLog,
+          abortController.signal,
+        );
+      } else {
+        // Execute WASM (bindgen)
+        await this.executeWASM(
+          wasmBytes,
+          jsCode,
+          container.command || [],
+          container.args || [],
+          container.env || [],
+          onLog,
+          abortController.signal,
+        );
+      }
 
       // Completed successfully
       onStatus({
@@ -384,6 +375,73 @@ export class Runtime {
 
       // Clean up the blob URL
       URL.revokeObjectURL(blobUrl);
+    }
+  }
+
+  private async executeWASI(
+    wasmBytes: Uint8Array,
+    command: string[],
+    args: string[],
+    env: Array<{ name: string; value: string }>,
+    onLog: (log: string) => void,
+    signal: AbortSignal,
+  ): Promise<void> {
+    console.log("[Runtime] Initializing WASI...");
+
+    class LogFile extends WasiFile {
+      constructor(private logger: (msg: string) => void) {
+        super(new Uint8Array([]));
+      }
+      write(data: Uint8Array): number {
+        const text = new TextDecoder().decode(data);
+        this.logger(text);
+        return data.length;
+      }
+    }
+
+    const argsList = [...command, ...args];
+    const envObj: string[] = env.map((e) => `${e.name}=${e.value}`);
+
+    const wasi = new WASI(argsList, envObj, [
+      new OpenFile(new WasiFile(new Uint8Array([]))),
+      new OpenFile(new LogFile(onLog)),
+      new OpenFile(new LogFile(onLog)),
+    ]);
+
+    try {
+      if (signal.aborted) throw new Error("Execution aborted");
+
+      const instance = await WebAssembly.instantiate(wasmBytes, {
+        wasi_snapshot_preview1: wasi.wasiImport,
+      });
+
+      console.log("[Runtime] Running WASI module...");
+
+      if (signal.aborted) throw new Error("Execution aborted");
+
+      // Handle both WebAssemblyInstantiatedSource and Instance return types
+      let wasmInstance: WebAssembly.Instance;
+      if ("instance" in instance) {
+        wasmInstance = (instance as unknown as WebAssembly.WebAssemblyInstantiatedSource).instance;
+      } else {
+        wasmInstance = instance as WebAssembly.Instance;
+      }
+
+      // Cast to unknown first to avoid "any" linting error, then to the shape required by WASI
+      const exitCode = wasi.start(
+        wasmInstance as unknown as { exports: { memory: WebAssembly.Memory; _start: () => unknown } },
+      );
+
+      onLog(`WASI execution completed with exit code: ${exitCode}`);
+
+      if (exitCode !== 0) {
+        throw new Error(`Process exited with code ${exitCode}`);
+      }
+    } catch (err) {
+      if (signal.aborted) {
+        throw new Error("Execution aborted");
+      }
+      throw err;
     }
   }
 

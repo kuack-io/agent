@@ -4,7 +4,6 @@ import { beforeEach, afterEach, vi } from "vitest";
 
 export const WS_URL = "ws://localhost:8080";
 const sentMessageKey = WS_URL;
-const restoreFns: Array<() => void> = [];
 
 export interface ConnectionTestEnvironment {
   trackConnection<T extends Connection>(connection: T): T;
@@ -33,6 +32,7 @@ export function overrideProperty<T extends object, K extends keyof T>(target: T,
 
 export function setupConnectionTestEnvironment(): ConnectionTestEnvironment {
   const sentMessages = new Map<string, string[]>();
+  const restoreFns: Array<() => void> = [];
   let mockServer: Server;
   let clientSocket: MockWebSocket | null = null;
   const connections = new Set<Connection>();
@@ -44,13 +44,12 @@ export function setupConnectionTestEnvironment(): ConnectionTestEnvironment {
 
     const restoreHardware = overrideProperty(navigator, "hardwareConcurrency", 4);
     const restoreDeviceMemory = overrideProperty(navigator as Navigator & { deviceMemory?: number }, "deviceMemory", 8);
-    const restoreHidden = overrideProperty(document as Document & { hidden?: boolean }, "hidden", false);
     const restoreGpu = overrideProperty(navigator as Navigator & { gpu?: unknown }, "gpu", {
       requestAdapter: vi.fn().mockResolvedValue({
         requestAdapterInfo: vi.fn().mockResolvedValue(null),
       }),
     });
-    restoreFns.push(restoreHardware, restoreDeviceMemory, restoreHidden, restoreGpu);
+    restoreFns.push(restoreHardware, restoreDeviceMemory, restoreGpu);
 
     mockServer = new Server(WS_URL);
     mockServer.on("connection", (socket) => {
