@@ -5,7 +5,7 @@ import { describe, it, expect, vi } from "vitest";
 const env = setupRuntimeTestEnvironment();
 
 describe("Runtime executePod", () => {
-  it("discovers WASM path from package.json and executes module", async () => {
+  it("executes bindgen WASM module when explicitly configured", async () => {
     const runtime = env.getRuntime();
     const runtimeInternals = env.getRuntimeInternals();
     const podSpec: PodSpec = {
@@ -18,6 +18,10 @@ describe("Runtime executePod", () => {
             command: ["/bin/check"],
             args: ["--flag"],
             env: [{ name: "KEY", value: "VALUE" }],
+            wasm: {
+              type: "wasm-bindgen",
+              path: "pkg/module_bg.wasm",
+            },
           },
         ],
       },
@@ -26,9 +30,6 @@ describe("Runtime executePod", () => {
     const onStatus = vi.fn();
     const onLog = vi.fn();
 
-    const downloadFile = vi
-      .spyOn(runtimeInternals, "downloadFile")
-      .mockResolvedValue(JSON.stringify({ main: "pkg/module.js" }));
     const wasmBytes = new Uint8Array([1, 2, 3]);
     const downloadWASM = vi.spyOn(runtimeInternals, "downloadWASM").mockResolvedValue(wasmBytes);
     const downloadJS = vi.spyOn(runtimeInternals, "downloadJS").mockResolvedValue("export const setup = () => {};");
@@ -36,10 +37,9 @@ describe("Runtime executePod", () => {
 
     await runtime.executePod(podSpec, onStatus, onLog);
 
-    expect(downloadFile).toHaveBeenCalledWith("test-image:latest", "pkg/package.json", undefined);
     expect(downloadWASM).toHaveBeenCalled();
-    expect(downloadWASM.mock.calls[0][0].wasm?.path).toBe("pkg/pkg/module_bg.wasm");
-    expect(downloadJS).toHaveBeenCalledWith("pkg/pkg/module_bg.wasm", "test-image:latest", undefined);
+    expect(downloadWASM.mock.calls[0][0].wasm?.path).toBe("pkg/module_bg.wasm");
+    expect(downloadJS).toHaveBeenCalledWith("pkg/module_bg.wasm", "test-image:latest", undefined);
     expect(executeWASM).toHaveBeenCalledWith(
       wasmBytes,
       "export const setup = () => {};",
@@ -55,7 +55,7 @@ describe("Runtime executePod", () => {
     });
     expect(onStatus).toHaveBeenNthCalledWith(2, {
       phase: "Running",
-      message: "Executing WASM module",
+      message: "Executing WASM module (bindgen)",
     });
     expect(onStatus).toHaveBeenNthCalledWith(3, {
       phase: "Succeeded",
@@ -65,33 +65,74 @@ describe("Runtime executePod", () => {
     expect(runtime.getRunningPodCount()).toBe(0);
   });
 
-  it("falls back to derived WASM path when auto-discovery fails", async () => {
+  it("fails if bindgen glue code download fails", async () => {
     const runtime = env.getRuntime();
     const runtimeInternals = env.getRuntimeInternals();
     const podSpec: PodSpec = {
-      metadata: { name: "fallback-pod", namespace: "jobs" },
+      metadata: { name: "fail-pod", namespace: "default" },
       spec: {
         containers: [
           {
             name: "runner",
-            image: "ghcr.io/kuack-io/super-checker:1.2.3",
+            image: "test-image:latest",
+            wasm: { type: "wasm-bindgen", path: "pkg/fail.wasm" },
           },
         ],
       },
     };
 
-    vi.spyOn(runtimeInternals, "downloadFile").mockRejectedValue(new Error("missing pkg"));
-    const downloadWASM = vi.spyOn(runtimeInternals, "downloadWASM").mockResolvedValue(new Uint8Array([9]));
-    const downloadJS = vi.spyOn(runtimeInternals, "downloadJS").mockResolvedValue("console.log('fallback');");
-    vi.spyOn(runtimeInternals, "executeWASM").mockResolvedValue(undefined);
+    const onStatus = vi.fn();
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    vi.spyOn(runtimeInternals, "downloadWASM").mockResolvedValue(new Uint8Array([]));
+    vi.spyOn(runtimeInternals, "downloadJS").mockRejectedValue(new Error("Network error"));
+
+    await runtime.executePod(podSpec, onStatus, vi.fn());
+
+    expect(onStatus).toHaveBeenLastCalledWith({
+      phase: "Failed",
+      message: expect.stringContaining("Failed to download JS glue for bindgen module: Error: Network error"),
+    });
+
+    errorLog.mockRestore();
+  });
+
+  it("executes WASI module when explicitly configured", async () => {
+    const runtime = env.getRuntime();
+    const runtimeInternals = env.getRuntimeInternals();
+    const podSpec: PodSpec = {
+      metadata: { name: "wasi-pod", namespace: "default" },
+      spec: {
+        containers: [
+          {
+            name: "runner",
+            image: "test-image:latest",
+            wasm: {
+              type: "wasi",
+              path: "app.wasm",
+            },
+          },
+        ],
+      },
+    };
+
+    const wasmBytes = new Uint8Array([9]);
+    const downloadWASM = vi.spyOn(runtimeInternals, "downloadWASM").mockResolvedValue(wasmBytes);
+    // WASI execution doesn't download JS
+    const downloadJS = vi.spyOn(runtimeInternals, "downloadJS");
+    const executeWASI = vi.spyOn(runtimeInternals, "executeWASI").mockResolvedValue(undefined);
 
     await runtime.executePod(podSpec, vi.fn(), vi.fn());
 
-    expect(downloadWASM.mock.calls[0][0].wasm?.path).toBe("pkg/super_checker_bg.wasm");
-    expect(downloadJS).toHaveBeenCalledWith(
-      "pkg/super_checker_bg.wasm",
-      "ghcr.io/kuack-io/super-checker:1.2.3",
-      undefined,
+    expect(downloadWASM.mock.calls[0][0].wasm?.path).toBe("app.wasm");
+    expect(downloadJS).not.toHaveBeenCalled();
+    expect(executeWASI).toHaveBeenCalledWith(
+      wasmBytes,
+      podSpec.spec.containers[0].command || [],
+      podSpec.spec.containers[0].args || [],
+      podSpec.spec.containers[0].env || [],
+      expect.any(Function),
+      expect.any(AbortSignal),
     );
   });
 

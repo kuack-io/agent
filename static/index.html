@@ -347,22 +347,37 @@
       appendLog('error', args);
     };
 
-    document.getElementById('clearLogsBtn').addEventListener('click', () => {
-      logsEl.innerHTML = '';
-    });
+
 
     let agent = null;
     const statusEl = document.getElementById('status');
-    const connectBtn = document.getElementById('connectBtn');
-    const disconnectBtn = document.getElementById('disconnectBtn');
     const serverUrlInput = document.getElementById('serverUrl');
     const agentTokenInput = document.getElementById('agentToken');
-    const showPasswordCheckbox = document.getElementById('showPassword');
+
+    // Helper to replace element to strip event listeners.
+    // This is necessary because HMR/Sync mode (devspace) can re-run this script, accumulating duplicate listeners if not cleared.
+    // By replacing the element with a clone, we drop all existing listeners.
+    function replaceElement(id) {
+      const el = document.getElementById(id);
+      const newEl = el.cloneNode(true);
+      el.parentNode.replaceChild(newEl, el);
+      return newEl;
+    }
+
+    const connectBtn = replaceElement('connectBtn');
+    const disconnectBtn = replaceElement('disconnectBtn');
+    const clearLogsBtn = replaceElement('clearLogsBtn');
+
+    clearLogsBtn.onclick = () => {
+      logsEl.innerHTML = '';
+    };
+
+    const showPasswordCheckbox = replaceElement('showPassword');
 
     // Toggle password visibility
-    showPasswordCheckbox.addEventListener('change', (e) => {
+    showPasswordCheckbox.onchange = (e) => {
       agentTokenInput.type = e.target.checked ? 'text' : 'password';
-    });
+    };
 
     // Helper function to update UI based on connection state
     function updateConnectionState(state) {
@@ -414,7 +429,17 @@
       }
     }
 
-    connectBtn.addEventListener('click', async () => {
+    connectBtn.onclick = async () => {
+      // Prevent multiple clicks or race conditions
+      if (connectBtn.disabled) return;
+
+      if (agent) {
+        try {
+          await agent.stop();
+        } catch (e) { console.warn('Error stopping previous agent:', e); }
+        agent = null;
+      }
+
       const serverUrl = serverUrlInput.value;
       const token = agentTokenInput.value;
       // Derive registry URL from server URL
@@ -475,15 +500,15 @@
         const errorMessage = err instanceof Error ? err.message : err?.toString() || 'Unknown error';
         statusEl.textContent = `Status: Error - ${errorMessage}`;
       }
-    });
+    };
 
-    disconnectBtn.addEventListener('click', async () => {
+    disconnectBtn.onclick = async () => {
       if (agent) {
         await agent.stop();
         agent = null;
       }
       updateConnectionState('disconnected');
-    });
+    };
 
     // Initialize resource display (will be updated when connected)
     document.getElementById('cpu').textContent = '-';

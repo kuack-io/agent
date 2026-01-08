@@ -24,11 +24,21 @@ type ImportWasmModuleFn = (blobUrl: string) => Promise<{
   main?: (env?: Record<string, string>) => Promise<unknown>;
 }>;
 
+type ExecuteWASIFn = (
+  wasmBytes: Uint8Array,
+  command: string[],
+  args: string[],
+  env: Array<{ name: string; value: string }>,
+  onLog: (log: string) => void,
+  signal: AbortSignal,
+) => Promise<void>;
+
 export type RuntimeInternals = {
   downloadFile: DownloadFileFn;
   downloadWASM: DownloadWASMFn;
   downloadJS: DownloadJSFn;
   executeWASM: ExecuteWASMFn;
+  executeWASI: ExecuteWASIFn;
   importWasmBindgenModule: ImportWasmModuleFn;
 };
 
