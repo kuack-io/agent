@@ -1,3 +1,9 @@
+## [1.4.0](https://github.com/kuack-io/agent/compare/1.3.6...1.4.0) (2026-01-08)
+
+### Features
+
+* wasi support ([bb5a42d](https://github.com/kuack-io/agent/commit/bb5a42db8922481f555dfc191f21ff3a70b2d702))
+
 ## [1.3.6](https://github.com/kuack-io/agent/compare/1.3.5...1.3.6) (2026-01-04)
 
 ### Bug Fixes
