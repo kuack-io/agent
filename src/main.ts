@@ -1,15 +1,33 @@
 import { Connection, type Message, type ConnectionState } from "./connection";
-import { Runtime, type PodSpec } from "./runtime";
+import type { PodSpec } from "./runtime";
+
+type WorkerOutputMessage =
+  | { type: "pod_status"; payload: { namespace: string; name: string; status: unknown } }
+  | { type: "pod_log"; payload: { namespace: string; name: string; log: string } }
+  | { type: "status_update"; payload: { runningPods: number; executedPods: number } }
+  | { type: "initialized" };
 
 class Agent {
   private connection: Connection;
-  private runtime: Runtime;
+  private worker: Worker;
   private onStateChangeCallback: ((state: ConnectionState) => void) | null = null;
   private resourceInterval: number | null = null;
+  private workerStatus: { runningPods: number; executedPods: number } = { runningPods: 0, executedPods: 0 };
 
   constructor(serverUrl: string, token: string, registryProxyUrl: string) {
     this.connection = new Connection(serverUrl, token);
-    this.runtime = new Runtime(registryProxyUrl, token);
+
+    // Initialize Web Worker
+    this.worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
+
+    // Initialize worker with config
+    this.worker.postMessage({
+      type: "init",
+      payload: { registryProxyUrl, token },
+    });
+
+    // Handle worker messages
+    this.worker.onmessage = (e) => this.handleWorkerMessage(e.data);
 
     // Set up message handler
     this.connection.onMessage(this.handleMessage.bind(this));
@@ -32,6 +50,8 @@ class Agent {
       this.connection.detectResources(true).catch(() => {
         // Silently fail or log only critical errors
       });
+      // Also sync status from worker periodically
+      this.worker.postMessage({ type: "get_status" });
     }, 5000) as unknown as number;
   }
 
@@ -42,6 +62,7 @@ class Agent {
       this.resourceInterval = null;
     }
     await this.connection.disconnect();
+    this.worker.terminate();
   }
 
   private async handleMessage(message: Message): Promise<void> {
@@ -52,11 +73,11 @@ class Agent {
         break;
 
       case "pod_spec":
-        await this.handlePodSpec(message.data as PodSpec);
+        this.handlePodSpec(message.data as PodSpec);
         break;
 
       case "pod_delete":
-        await this.handlePodDelete(message.data as { namespace: string; name: string });
+        this.handlePodDelete(message.data as { namespace: string; name: string });
         break;
 
       default:
@@ -64,29 +85,50 @@ class Agent {
     }
   }
 
-  private async handlePodSpec(podSpec: PodSpec): Promise<void> {
+  private handlePodSpec(podSpec: PodSpec): void {
     console.log("[Agent] Received pod spec:", podSpec.metadata.name);
-
-    // Execute pod and report status updates
-    await this.runtime.executePod(
-      podSpec,
-      (status) => this.reportPodStatus(podSpec, status),
-      (log) => this.reportPodLog(podSpec, log),
-    );
+    // Forward to worker
+    this.worker.postMessage({
+      type: "execute_pod",
+      payload: podSpec,
+    });
   }
 
-  private async handlePodDelete(data: { namespace: string; name: string }): Promise<void> {
+  private handlePodDelete(data: { namespace: string; name: string }): void {
     console.log("[Agent] Received pod delete:", data.name);
-    await this.runtime.deletePod(data.namespace, data.name);
+    // Forward to worker
+    this.worker.postMessage({
+      type: "delete_pod",
+      payload: data,
+    });
   }
 
-  private async reportPodStatus(podSpec: PodSpec, status: unknown): Promise<void> {
+  private handleWorkerMessage(msg: WorkerOutputMessage): void {
+    switch (msg.type) {
+      case "pod_status":
+        this.reportPodStatus(msg.payload.namespace, msg.payload.name, msg.payload.status);
+        break;
+      case "pod_log":
+        this.reportPodLog(msg.payload.namespace, msg.payload.name, msg.payload.log);
+        break;
+      case "status_update":
+        this.workerStatus = msg.payload;
+        break;
+      case "initialized":
+        console.log("[Agent] Worker initialized");
+        break;
+      default:
+      // ignore
+    }
+  }
+
+  private async reportPodStatus(namespace: string, name: string, status: unknown): Promise<void> {
     const message: Message = {
       type: "pod_status",
       timestamp: new Date().toISOString(),
       data: {
-        namespace: podSpec.metadata.namespace,
-        name: podSpec.metadata.name,
+        namespace,
+        name,
         status,
       },
     };
@@ -98,13 +140,13 @@ class Agent {
     }
   }
 
-  private async reportPodLog(podSpec: PodSpec, log: string): Promise<void> {
+  private async reportPodLog(namespace: string, name: string, log: string): Promise<void> {
     const message: Message = {
       type: "pod_logs",
       timestamp: new Date().toISOString(),
       data: {
-        namespace: podSpec.metadata.namespace,
-        name: podSpec.metadata.name,
+        namespace,
+        name,
         log,
       },
     };
@@ -120,8 +162,8 @@ class Agent {
     const resources = this.connection.getDetectedResources();
     return {
       uuid: this.connection.getUUID(),
-      runningPods: this.runtime.getRunningPodCount(),
-      executedPods: this.runtime.getExecutedPodCount(),
+      runningPods: this.workerStatus.runningPods,
+      executedPods: this.workerStatus.executedPods,
       state: this.connection.getState(),
       cpu: resources?.cpu || null,
       memory: resources?.memory || null,

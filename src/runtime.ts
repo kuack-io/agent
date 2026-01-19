@@ -1,4 +1,4 @@
-import { WASI, File as WasiFile, OpenFile } from "@bjorn3/browser_wasi_shim";
+import { WASI, File as WasiFile, OpenFile, PreopenDirectory } from "@bjorn3/browser_wasi_shim";
 
 interface WasmBindgenModule {
   default: (config: { module_or_path: Uint8Array }) => Promise<void>;
@@ -169,6 +169,57 @@ export class Runtime {
     }
   }
 
+  private async fetchWithRetry(url: string, options: RequestInit = {}, retries = 3, backoff = 1000): Promise<Response> {
+    const sanitizeUrl = (u: string) => {
+      try {
+        const urlObj = new URL(u);
+        if (urlObj.searchParams.has("token")) {
+          urlObj.searchParams.set("token", "***");
+        }
+        return urlObj.toString();
+      } catch {
+        return u;
+      }
+    };
+
+    for (let i = 0; i < retries; i++) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+
+        const response = await fetch(url, {
+          ...options,
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeoutId);
+
+        if (response.ok) {
+          return response;
+        }
+
+        // If not ok, throw error to trigger retry (unless it's a 404, which probably won't be fixed by retry)
+        if (response.status === 404) {
+          throw new Error(`HTTP 404: Not Found`);
+        }
+
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      } catch (err) {
+        const isLastAttempt = i === retries - 1;
+        console.warn(`[Runtime] Fetch failed for ${sanitizeUrl(url)} (attempt ${i + 1}/${retries}): ${err}`);
+
+        if (isLastAttempt) {
+          throw err;
+        }
+
+        // Wait before retrying
+        await new Promise((resolve) => setTimeout(resolve, backoff * Math.pow(2, i)));
+      }
+    }
+
+    throw new Error("Unreachable");
+  }
+
   private async downloadFile(imageRef: string, path: string, variant?: string): Promise<string> {
     const url = this.buildRegistryUrl();
     url.searchParams.set("image", imageRef);
@@ -182,19 +233,7 @@ export class Runtime {
 
     console.log(`[Runtime] Downloading file ${path} from ${this.sanitizeUrlForLogging(url)}`);
 
-    const response = await fetch(url.toString());
-
-    if (!response.ok) {
-      // Try to read error text if available
-      let errorText = response.statusText;
-      try {
-        const text = await response.text();
-        if (text) errorText = `${response.statusText}: ${text}`;
-      } catch {
-        // ignore
-      }
-      throw new Error(`Failed to download file ${path}: ${response.status} ${errorText}`);
-    }
+    const response = await this.fetchWithRetry(url.toString());
 
     return await response.text();
   }
@@ -215,19 +254,7 @@ export class Runtime {
 
     console.log(`[Runtime] Downloading WASM from ${this.sanitizeUrlForLogging(url)}`);
 
-    const response = await fetch(url.toString());
-
-    if (!response.ok) {
-      // Try to read error text if available
-      let errorText = response.statusText;
-      try {
-        const text = await response.text();
-        if (text) errorText = `${response.statusText}: ${text}`;
-      } catch {
-        // ignore
-      }
-      throw new Error(`Failed to download WASM: ${response.status} ${errorText}`);
-    }
+    const response = await this.fetchWithRetry(url.toString());
 
     const arrayBuffer = await response.arrayBuffer();
     return new Uint8Array(arrayBuffer);
@@ -249,11 +276,7 @@ export class Runtime {
 
     console.log(`[Runtime] Downloading JS glue code from ${this.sanitizeUrlForLogging(url)}`);
 
-    const response = await fetch(url.toString());
-
-    if (!response.ok) {
-      throw new Error(`Failed to download JS: ${response.status} ${response.statusText}`);
-    }
+    const response = await this.fetchWithRetry(url.toString());
 
     return await response.text();
   }
@@ -406,6 +429,7 @@ export class Runtime {
       new OpenFile(new WasiFile(new Uint8Array([]))),
       new OpenFile(new LogFile(onLog)),
       new OpenFile(new LogFile(onLog)),
+      new PreopenDirectory("/", new Map()),
     ]);
 
     try {

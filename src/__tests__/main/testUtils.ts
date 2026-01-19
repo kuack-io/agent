@@ -18,6 +18,7 @@ export type MockConnection = {
   getUUID: MockFn;
   getState: MockFn;
   getDetectedResources: MockFn;
+  detectResources: MockFn;
 };
 
 export type MockRuntime = {
@@ -37,6 +38,7 @@ function createMockConnection(): MockConnection {
     getUUID: vi.fn().mockReturnValue("test-uuid-123"),
     getState: vi.fn().mockReturnValue("disconnected"),
     getDetectedResources: vi.fn().mockReturnValue(null),
+    detectResources: vi.fn().mockResolvedValue(undefined), // Defaults to resolving
   };
 }
 
@@ -74,15 +76,34 @@ export const RuntimeConstructorMock = runtimeConstructorMock;
 export type AgentHarness = {
   agent: Agent;
   mockConnection: MockConnection;
-  mockRuntime: MockRuntime;
+  mockWorker: {
+    postMessage: MockFn;
+    terminate: MockFn;
+    onmessage: ((e: MessageEvent) => void) | null;
+  };
   dispatchMessage: (message: Message) => Promise<void>;
+  dispatchWorkerMessage: (data: unknown) => void;
 };
 
 export const createAgentHarness = (): AgentHarness => {
   vi.clearAllMocks();
+
+  // Mock Worker
+  const mockWorker = {
+    postMessage: vi.fn(),
+    terminate: vi.fn(),
+    onmessage: null as ((e: MessageEvent) => void) | null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  };
+
+  global.Worker = vi.fn(function () {
+    return mockWorker;
+  }) as unknown as typeof Worker;
+
   const agent = new Agent(SERVER_URL, TOKEN, REGISTRY_URL);
   const mockConnection = agent["connection"] as unknown as MockConnection;
-  const mockRuntime = agent["runtime"] as unknown as MockRuntime;
 
   const dispatchMessage = async (message: Message) => {
     const handler = mockConnection.onMessage.mock.calls[0]?.[0];
@@ -92,11 +113,18 @@ export const createAgentHarness = (): AgentHarness => {
     await handler(message);
   };
 
+  const dispatchWorkerMessage = (data: unknown) => {
+    if (mockWorker.onmessage) {
+      mockWorker.onmessage({ data } as MessageEvent);
+    }
+  };
+
   return {
     agent,
     mockConnection,
-    mockRuntime,
+    mockWorker,
     dispatchMessage,
+    dispatchWorkerMessage,
   };
 };
 

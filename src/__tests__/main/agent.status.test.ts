@@ -21,7 +21,13 @@ describe("Agent status", () => {
   });
 
   it("reflects the running pod count", () => {
-    harness.mockRuntime.getRunningPodCount.mockReturnValue(3);
+    harness.dispatchWorkerMessage({
+      type: "status_update",
+      payload: {
+        runningPods: 3,
+        executedPods: 0,
+      },
+    });
     expect(harness.agent.getStatus().runningPods).toBe(3);
   });
 
@@ -49,5 +55,46 @@ describe("Agent state change subscription", () => {
     stateChange?.("connected");
 
     expect(callback).toHaveBeenCalledWith("connected");
+  });
+});
+describe("Agent internal logic coverage", () => {
+  it("logs when worker is initialized", () => {
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    harness.dispatchWorkerMessage({ type: "initialized" });
+    expect(consoleSpy).toHaveBeenCalledWith("[Agent] Worker initialized");
+    consoleSpy.mockRestore();
+  });
+
+  it("handles resource detection failures silently", async () => {
+    vi.useFakeTimers();
+    harness.mockConnection.detectResources.mockRejectedValue(new Error("Detection failed"));
+
+    // Start agent to trigger interval
+    await harness.agent.start();
+
+    // Advance time to trigger interval
+    await vi.advanceTimersByTimeAsync(5000);
+
+    // Should have called detectResources
+    expect(harness.mockConnection.detectResources).toHaveBeenCalled();
+
+    // Clean up
+    await harness.agent.stop();
+    vi.useRealTimers();
+  });
+
+  it("clears resource interval on stop", async () => {
+    vi.useFakeTimers();
+    await harness.agent.start();
+
+    // Stop should clear interval
+    await harness.agent.stop();
+
+    // Advance time - detectResources should NOT be called again
+    harness.mockConnection.detectResources.mockClear();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(harness.mockConnection.detectResources).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
   });
 });
