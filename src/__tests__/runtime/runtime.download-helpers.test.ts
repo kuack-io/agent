@@ -35,9 +35,8 @@ describe("Runtime download helpers", () => {
       }),
     );
 
-    await expect(runtime.downloadFile("img", "pkg/package.json")).rejects.toThrow(
-      "Failed to download file pkg/package.json: 404 Not Found: missing",
-    );
+    // Runtime throws direct HTTP error without wrapping
+    await expect(runtime.downloadFile("img", "pkg/package.json")).rejects.toThrow("HTTP 404: Not Found");
   });
 
   it("downloadWASM returns Uint8Array", async () => {
@@ -67,9 +66,7 @@ describe("Runtime download helpers", () => {
       createFetchResponse({ ok: false, status: 500, statusText: "Server Error", text: () => Promise.resolve("boom") }),
     );
 
-    await expect(runtime.downloadWASM({ name: "runner", image: "img" })).rejects.toThrow(
-      "Failed to download WASM: 500 Server Error: boom",
-    );
+    await expect(runtime.downloadWASM({ name: "runner", image: "img" })).rejects.toThrow("HTTP 500: Server Error");
   });
 
   it("downloadJS derives JS path from WASM path", async () => {
@@ -90,8 +87,6 @@ describe("Runtime download helpers", () => {
     const fetchMock = env.getFetchMock();
     fetchMock.mockResolvedValue(createFetchResponse({ ok: false, status: 502, statusText: "Bad Gateway" }));
 
-    await expect(runtime.downloadJS("pkg/sample_bg.wasm", "img")).rejects.toThrow(
-      "Failed to download JS: 502 Bad Gateway",
-    );
+    await expect(runtime.downloadJS("pkg/sample_bg.wasm", "img")).rejects.toThrow("HTTP 502: Bad Gateway");
   });
 });

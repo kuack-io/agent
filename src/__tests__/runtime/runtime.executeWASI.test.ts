@@ -16,7 +16,8 @@ vi.mock("@bjorn3/browser_wasi_shim", () => {
       start: vi.fn().mockReturnValue(0),
     };
   });
-  return { WASI, File: WasiFile, OpenFile };
+  const PreopenDirectory = vi.fn();
+  return { WASI, File: WasiFile, OpenFile, PreopenDirectory };
 });
 
 const env = setupRuntimeTestEnvironment();
@@ -200,8 +201,8 @@ describe("Runtime executeWASI", () => {
 
     await runtimeInternals.executeWASI(new Uint8Array([]), [], [], [], onLog, controller.signal);
 
-    // Verify fds are passed (stdin, stdout, stderr)
-    expect(capturedFds).toHaveLength(3);
+    // Verify fds are passed (stdin, stdout, stderr, preopen)
+    expect(capturedFds).toHaveLength(4);
 
     // The LogFile class logic (decoding bytes and calling logger) is encapsulated.
     // To test it, we would theoretically need to extract the 'write' method from the intercepted objects.

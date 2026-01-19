@@ -32,6 +32,9 @@ export default [
         TextEncoder: 'readonly',
         TextDecoder: 'readonly',
         global: 'readonly',
+        self: 'readonly',
+        Worker: 'readonly',
+        MessageEvent: 'readonly',
       },
     },
     plugins: {

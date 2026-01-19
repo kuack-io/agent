@@ -1,7 +1,6 @@
 import {
   createAgentHarness,
   ConnectionConstructorMock,
-  RuntimeConstructorMock,
   SERVER_URL,
   REGISTRY_URL,
   TOKEN,
@@ -18,8 +17,12 @@ beforeEach(() => {
 describe("Agent constructor", () => {
   it("creates connection and runtime dependencies", () => {
     expect(ConnectionConstructorMock).toHaveBeenCalledWith(SERVER_URL, TOKEN);
-    expect(RuntimeConstructorMock).toHaveBeenCalledWith(REGISTRY_URL, TOKEN);
-    expect(harness.mockConnection.onMessage).toHaveBeenCalled();
+    expect(ConnectionConstructorMock).toHaveBeenCalledWith(SERVER_URL, TOKEN);
+    expect(harness.mockWorker.postMessage).toHaveBeenCalledWith({
+      type: "init",
+      payload: { registryProxyUrl: REGISTRY_URL, token: TOKEN },
+    });
+    expect(harness.mockWorker.onmessage).toBeDefined();
   });
 });
 

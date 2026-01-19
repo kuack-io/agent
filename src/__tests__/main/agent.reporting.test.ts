@@ -1,4 +1,4 @@
-import { createAgentHarness, createAgentMessage, createPodSpec, type AgentHarness } from "./testUtils";
+import { createAgentHarness, type AgentHarness } from "./testUtils";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 let harness: AgentHarness;
@@ -9,18 +9,19 @@ beforeEach(() => {
 
 describe("Agent pod status reporting", () => {
   it("sends pod status when runtime reports", async () => {
-    const podSpec = createPodSpec();
     const status = {
       phase: "Running" as const,
       message: "Pod is running",
     };
 
-    harness.mockRuntime.executePod.mockImplementation(async (_spec, onStatus) => {
-      onStatus(status);
+    harness.dispatchWorkerMessage({
+      type: "pod_status",
+      payload: {
+        namespace: "default",
+        name: "test-pod",
+        status,
+      },
     });
-
-    await harness.dispatchMessage(createAgentMessage("pod_spec", podSpec));
-    await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(harness.mockConnection.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -36,17 +37,18 @@ describe("Agent pod status reporting", () => {
 
   it("logs when pod status reporting fails", async () => {
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const podSpec = createPodSpec();
     harness.mockConnection.sendMessage.mockRejectedValueOnce(new Error("Connection error"));
 
-    harness.mockRuntime.executePod.mockImplementation(async (_spec, onStatus) => {
-      onStatus({
-        phase: "Running" as const,
-        message: "Pod is running",
-      });
+    harness.dispatchWorkerMessage({
+      type: "pod_status",
+      payload: {
+        namespace: "default",
+        name: "test-pod",
+        status: { phase: "Running", message: "running" },
+      },
     });
 
-    await harness.dispatchMessage(createAgentMessage("pod_spec", podSpec));
+    // Wait for async handler
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(consoleSpy).toHaveBeenCalledWith(
@@ -60,28 +62,36 @@ describe("Agent pod status reporting", () => {
 
 describe("Agent pod log reporting", () => {
   it("forwards pod logs when available", async () => {
-    const podSpec = createPodSpec();
-
-    harness.mockRuntime.executePod.mockImplementation(async (_spec, _onStatus, onLog) => {
-      onLog("test log line");
+    harness.dispatchWorkerMessage({
+      type: "pod_log",
+      payload: {
+        namespace: "default",
+        name: "test-pod",
+        log: "test log line",
+      },
     });
 
-    await harness.dispatchMessage(createAgentMessage("pod_spec", podSpec));
-    await new Promise((resolve) => setTimeout(resolve, 10));
-
-    expect(harness.mockRuntime.executePod).toHaveBeenCalled();
+    expect(harness.mockConnection.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "pod_logs",
+        data: expect.objectContaining({ log: "test log line" }),
+      }),
+    );
   });
 
   it("logs when reporting pod logs fails", async () => {
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const podSpec = createPodSpec();
-
     harness.mockConnection.sendMessage.mockRejectedValueOnce(new Error("Connection error"));
-    harness.mockRuntime.executePod.mockImplementation(async (_spec, _onStatus, onLog) => {
-      onLog("test log line");
+
+    harness.dispatchWorkerMessage({
+      type: "pod_log",
+      payload: {
+        namespace: "default",
+        name: "test-pod",
+        log: "test log line",
+      },
     });
 
-    await harness.dispatchMessage(createAgentMessage("pod_spec", podSpec));
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(consoleSpy).toHaveBeenCalledWith(
