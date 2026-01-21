@@ -1,4 +1,4 @@
-import { WASI, File as WasiFile, OpenFile, PreopenDirectory } from "@bjorn3/browser_wasi_shim";
+import { WASI, File as WasiFile, OpenFile, PreopenDirectory, ConsoleStdout } from "@bjorn3/browser_wasi_shim";
 
 interface WasmBindgenModule {
   default: (config: { module_or_path: Uint8Array }) => Promise<void>;
@@ -185,7 +185,7 @@ export class Runtime {
     for (let i = 0; i < retries; i++) {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+        const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout
 
         const response = await fetch(url, {
           ...options,
@@ -411,24 +411,24 @@ export class Runtime {
   ): Promise<void> {
     console.log("[Runtime] Initializing WASI...");
 
-    class LogFile extends WasiFile {
-      constructor(private logger: (msg: string) => void) {
-        super(new Uint8Array([]));
-      }
-      write(data: Uint8Array): number {
-        const text = new TextDecoder().decode(data);
-        this.logger(text);
-        return data.length;
-      }
-    }
-
     const argsList = [...command, ...args];
+    const argsMsg = `[Runtime] WASI args: ${JSON.stringify(argsList)}`;
+    console.log(argsMsg);
+    onLog(argsMsg);
     const envObj: string[] = env.map((e) => `${e.name}=${e.value}`);
 
+    // Use ConsoleStdout.lineBuffered() which is the proper way to handle stdout/stderr
+    // in browser_wasi_shim. The custom LogFile class was causing output to be lost.
     const wasi = new WASI(argsList, envObj, [
-      new OpenFile(new WasiFile(new Uint8Array([]))),
-      new OpenFile(new LogFile(onLog)),
-      new OpenFile(new LogFile(onLog)),
+      new OpenFile(new WasiFile(new Uint8Array([]))), // stdin
+      ConsoleStdout.lineBuffered((line) => {
+        console.log(`[WASI stdout] ${line}`);
+        onLog(line);
+      }),
+      ConsoleStdout.lineBuffered((line) => {
+        console.log(`[WASI stderr] ${line}`);
+        onLog(line);
+      }),
       new PreopenDirectory("/", new Map()),
     ]);
 
@@ -451,7 +451,6 @@ export class Runtime {
         wasmInstance = instance as WebAssembly.Instance;
       }
 
-      // Cast to unknown first to avoid "any" linting error, then to the shape required by WASI
       const exitCode = wasi.start(
         wasmInstance as unknown as { exports: { memory: WebAssembly.Memory; _start: () => unknown } },
       );
@@ -462,6 +461,12 @@ export class Runtime {
         throw new Error(`Process exited with code ${exitCode}`);
       }
     } catch (err) {
+      console.error("[Runtime] WASI execution failed:", err);
+      onLog(`[Runtime] WASI execution failed: ${err}`);
+      if (err instanceof Error && err.stack) {
+        onLog(`Stack: ${err.stack}`);
+      }
+
       if (signal.aborted) {
         throw new Error("Execution aborted");
       }
