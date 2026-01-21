@@ -117,6 +117,24 @@ describe("onMessage", () => {
 });
 
 describe("heartbeat", () => {
+  /**
+   * Helper to wait until a condition is true, with timeout.
+   * More deterministic than fixed wait times.
+   */
+  const waitForCondition = async (
+    condition: () => boolean,
+    timeout: number = 1000,
+    pollInterval: number = 20,
+  ): Promise<void> => {
+    const start = Date.now();
+    while (!condition()) {
+      if (Date.now() - start > timeout) {
+        throw new Error(`Condition not met within ${timeout}ms`);
+      }
+      await wait(pollInterval);
+    }
+  };
+
   it("sends periodic heartbeat messages", async () => {
     const restoreHidden = overrideProperty(document as Document & { hidden?: boolean }, "hidden", false);
     vi.useRealTimers();
@@ -124,8 +142,19 @@ describe("heartbeat", () => {
     const connectPromise = connection.connect();
     await wait(50);
     await connectPromise;
-    await wait(200);
-    await wait(150);
+
+    // Wait for at least one heartbeat message instead of fixed timing
+    await waitForCondition(() => {
+      const messages = env.getSentMessages().get(WS_URL) || [];
+      return messages.some((msg) => {
+        try {
+          return JSON.parse(msg).type === "heartbeat";
+        } catch {
+          return false;
+        }
+      });
+    }, 500); // Allow up to 500ms for heartbeat (should happen within 100ms)
+
     const messages = env.getSentMessages().get(WS_URL) || [];
     const heartbeat = messages.map((msg) => JSON.parse(msg)).find((m: Message) => m.type === "heartbeat");
     expect(heartbeat).toBeDefined();
@@ -141,8 +170,19 @@ describe("heartbeat", () => {
     const connectPromise = connection.connect();
     await wait(50);
     await connectPromise;
-    await wait(200);
-    await wait(150);
+
+    // Wait for at least one heartbeat message instead of fixed timing
+    await waitForCondition(() => {
+      const messages = env.getSentMessages().get(WS_URL) || [];
+      return messages.some((msg) => {
+        try {
+          return JSON.parse(msg).type === "heartbeat";
+        } catch {
+          return false;
+        }
+      });
+    }, 500); // Allow up to 500ms for heartbeat (should happen within 100ms)
+
     const messages = env.getSentMessages().get(WS_URL) || [];
     const heartbeat = messages.map((msg) => JSON.parse(msg)).find((m: Message) => m.type === "heartbeat");
     expect(heartbeat).toBeDefined();
