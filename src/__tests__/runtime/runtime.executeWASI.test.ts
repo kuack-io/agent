@@ -17,7 +17,12 @@ vi.mock("@bjorn3/browser_wasi_shim", () => {
     };
   });
   const PreopenDirectory = vi.fn();
-  return { WASI, File: WasiFile, OpenFile, PreopenDirectory };
+  const ConsoleStdout = {
+    lineBuffered: vi.fn().mockReturnValue({
+      write: vi.fn().mockReturnValue(0),
+    }),
+  };
+  return { WASI, File: WasiFile, OpenFile, PreopenDirectory, ConsoleStdout };
 });
 
 const env = setupRuntimeTestEnvironment();
