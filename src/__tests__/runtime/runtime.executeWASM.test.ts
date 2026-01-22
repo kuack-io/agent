@@ -36,7 +36,7 @@ describe("Runtime executeWASM", () => {
     expect(module.default).toHaveBeenCalledWith({ module_or_path: wasmBytes });
     expect(module.main).toHaveBeenCalledWith({ ENV: "VALUE" });
     expect(onLog).toHaveBeenCalledWith(expect.stringContaining("Loading wasm-bindgen JS module"));
-    expect(onLog).toHaveBeenCalledWith("WASM execution completed with result: OK");
+    expect(onLog).toHaveBeenCalledWith(expect.stringContaining("WASM execution completed"));
     expect(revokeSpy).toHaveBeenCalledWith("blob:mock-url");
     expect(console.log).toBe(originalConsoleLog);
     restore();

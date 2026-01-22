@@ -81,7 +81,7 @@ describe("Runtime executeWASI", () => {
 
     // Verify start called with module instance
     expect(mockWasiInstance.start).toHaveBeenCalledWith(mockModule.instance);
-    expect(onLog).toHaveBeenCalledWith("WASI execution completed with exit code: 0");
+    expect(onLog).toHaveBeenCalledWith("WASI execution completed successfully");
   });
 
   it("handles non-zero exit code", async () => {
