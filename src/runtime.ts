@@ -37,6 +37,7 @@ export interface PodStatus {
 }
 
 export class Runtime {
+  private static readonly MAX_ENV_VARS = 256;
   private runningPods: Map<string, AbortController> = new Map();
   private executedPodCount: number = 0;
   private registryProxyUrl: string;
@@ -45,6 +46,18 @@ export class Runtime {
   constructor(registryProxyUrl: string, token: string) {
     this.registryProxyUrl = registryProxyUrl;
     this.token = token;
+  }
+
+  private log(message: string) {
+    console.log(`[Runtime] ${message}`);
+  }
+
+  private logWarn(message: string) {
+    console.warn(`[Runtime] ${message}`);
+  }
+
+  private logError(message: string) {
+    console.error(`[Runtime] ${message}`);
   }
 
   /**
@@ -58,6 +71,38 @@ export class Runtime {
     return sanitizedUrl.toString();
   }
 
+  private normalizeEnv(env: Array<{ name: string; value: string }>): Array<{ name: string; value: string }> {
+    if (env.length === 0) {
+      return env;
+    }
+
+    const deduped = new Map<string, string>();
+    for (const entry of env) {
+      if (!entry.name) {
+        continue;
+      }
+      if (deduped.has(entry.name)) {
+        deduped.delete(entry.name);
+      }
+      deduped.set(entry.name, entry.value ?? "");
+    }
+
+    let entries = Array.from(deduped.entries()).map(([name, value]) => ({ name, value }));
+    if (entries.length > Runtime.MAX_ENV_VARS) {
+      const start = entries.length - Runtime.MAX_ENV_VARS;
+      entries = entries.slice(start);
+      this.logWarn(
+        `Truncated environment variables to last ${Runtime.MAX_ENV_VARS} entries (was ${deduped.size})`,
+      );
+    }
+
+    return entries;
+  }
+
+  getRunningPodCount(): number {
+    return this.runningPods.size;
+  }
+
   getExecutedPodCount(): number {
     return this.executedPodCount;
   }
@@ -68,45 +113,39 @@ export class Runtime {
     onLog: (log: string) => void,
   ): Promise<void> {
     const podKey = `${podSpec.metadata.namespace}/${podSpec.metadata.name}`;
-    console.log(`[Runtime] Executing pod: ${podKey}`);
+    this.log(`Executing pod: ${podKey}`);
     this.executedPodCount++;
 
-    // Update status to Pending
     onStatus({
       phase: "Pending",
       message: "Downloading WASM module",
     });
 
     try {
-      // For now, only support single container
       const container = podSpec.spec.containers[0];
       if (!container) {
         throw new Error("No containers specified");
       }
 
-      // Check for explicit WASM config from Node
       if (!container.wasm || !container.wasm.path) {
         throw new Error("Missing WASM configuration (path) in PodSpec. Node should have resolved this.");
       }
 
-      const wasmType = container.wasm.type || "wasi"; // Default to WASI if not specified (though Node should set it)
+      const wasmType = container.wasm.type || "wasi";
       const isWasi = wasmType === "wasi";
       const wasmPath = container.wasm.path;
 
-      console.log(`[Runtime] Configuration: Type=${wasmType}, Path=${wasmPath}`);
+      this.log(`Configuration: Type=${wasmType}, Path=${wasmPath}`);
 
-      // Download WASM module from registry proxy
       const wasmBytes = await this.downloadWASM(container);
 
-      // Determine execution mode
       let jsCode = "";
       if (!isWasi) {
-        // bindgen mode requires JS glue
         try {
           const imageRef = container.wasm?.image ?? container.image;
           jsCode = await this.downloadJS(wasmPath, imageRef, container.wasm?.variant);
         } catch (err) {
-          console.error(`[Runtime] Failed to download JS glue for bindgen module: ${err}`);
+          this.logError(`Failed to download JS glue for bindgen module: ${err}`);
           throw new Error(`Failed to download JS glue for bindgen module: ${err}`);
         }
       }
@@ -116,7 +155,6 @@ export class Runtime {
         message: isWasi ? "Executing WASI module" : "Executing WASM module (bindgen)",
       });
 
-      // Create abort controller for this pod
       const abortController = new AbortController();
       this.runningPods.set(podKey, abortController);
 
@@ -130,7 +168,6 @@ export class Runtime {
           abortController.signal,
         );
       } else {
-        // Execute WASM (bindgen)
         await this.executeWASM(
           wasmBytes,
           jsCode,
@@ -142,13 +179,12 @@ export class Runtime {
         );
       }
 
-      // Completed successfully
       onStatus({
         phase: "Succeeded",
         message: "WASM execution completed",
       });
     } catch (error) {
-      console.error(`[Runtime] Pod execution failed:`, error);
+      this.logError(`Pod execution failed: ${error}`);
       onStatus({
         phase: "Failed",
         message: `Execution error: ${error}`,
@@ -163,29 +199,23 @@ export class Runtime {
     const controller = this.runningPods.get(podKey);
 
     if (controller) {
-      console.log(`[Runtime] Terminating pod: ${podKey}`);
+      this.log(`Terminating pod: ${podKey}`);
       controller.abort();
       this.runningPods.delete(podKey);
     }
   }
 
-  private async fetchWithRetry(url: string, options: RequestInit = {}, retries = 3, backoff = 1000): Promise<Response> {
-    const sanitizeUrl = (u: string) => {
-      try {
-        const urlObj = new URL(u);
-        if (urlObj.searchParams.has("token")) {
-          urlObj.searchParams.set("token", "***");
-        }
-        return urlObj.toString();
-      } catch {
-        return u;
-      }
-    };
-
+  private async fetchWithRetry(
+    url: string,
+    options: RequestInit = {},
+    retries = 3,
+    backoff = 1000,
+    timeoutMs = 30000,
+  ): Promise<Response> {
     for (let i = 0; i < retries; i++) {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
         const response = await fetch(url, {
           ...options,
@@ -198,7 +228,6 @@ export class Runtime {
           return response;
         }
 
-        // If not ok, throw error to trigger retry (unless it's a 404, which probably won't be fixed by retry)
         if (response.status === 404) {
           throw new Error(`HTTP 404: Not Found`);
         }
@@ -206,36 +235,28 @@ export class Runtime {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       } catch (err) {
         const isLastAttempt = i === retries - 1;
-        console.warn(`[Runtime] Fetch failed for ${sanitizeUrl(url)} (attempt ${i + 1}/${retries}): ${err}`);
+        this.logWarn(
+          `Fetch failed for ${this.sanitizeUrlForLogging(new URL(url))} (attempt ${i + 1}/${retries}): ${err}`,
+        );
 
         if (isLastAttempt) {
           throw err;
         }
-
-        // Wait before retrying
         await new Promise((resolve) => setTimeout(resolve, backoff * Math.pow(2, i)));
       }
     }
-
     throw new Error("Unreachable");
   }
 
-  private async downloadFile(imageRef: string, path: string, variant?: string): Promise<string> {
-    const url = this.buildRegistryUrl();
-    url.searchParams.set("image", imageRef);
-    url.searchParams.set("path", path);
-    if (this.token) {
-      url.searchParams.set("token", this.token);
+  private buildRegistryUrl(): URL {
+    try {
+      return new URL(this.registryProxyUrl);
+    } catch (err) {
+      if (typeof window !== "undefined" && window.location) {
+        return new URL(this.registryProxyUrl, window.location.origin);
+      }
+      throw err;
     }
-    if (variant) {
-      url.searchParams.set("variant", variant);
-    }
-
-    console.log(`[Runtime] Downloading file ${path} from ${this.sanitizeUrlForLogging(url)}`);
-
-    const response = await this.fetchWithRetry(url.toString());
-
-    return await response.text();
   }
 
   private async downloadWASM(container: ContainerSpec): Promise<Uint8Array> {
@@ -252,18 +273,58 @@ export class Runtime {
       url.searchParams.set("variant", container.wasm.variant);
     }
 
-    console.log(`[Runtime] Downloading WASM from ${this.sanitizeUrlForLogging(url)}`);
+    this.log(`Downloading WASM from ${this.sanitizeUrlForLogging(url)}`);
 
-    const response = await this.fetchWithRetry(url.toString());
+    let response: Response;
+    try {
+      response = await this.fetchWithRetry(url.toString(), {}, 3, 1000, 120000);
+    } catch (err: any) {
+      // Fallback strategies for 404s
+      if (err.message === "HTTP 404: Not Found") {
+        // Strategy 1: If path was not "out.wasm", try "out.wasm" (common c2w default)
+        const currentPath = url.searchParams.get("path");
+        if (currentPath !== "/out.wasm" && currentPath !== "out.wasm") {
+          this.logWarn(`WASM download 404 for ${currentPath}, trying fallback: out.wasm`);
+          url.searchParams.set("path", "out.wasm");
+          try {
+            response = await this.fetchWithRetry(url.toString(), {}, 3, 1000, 120000);
+          } catch (retryErr) {
+            // If fallback fails, throw original error (or maybe the new one?)
+            // Throwing the original error is often less confusing if the fallback was just a guess.
+            // But if the fallback 404s too, throwing that is fine.
+            throw err;
+          }
+        } else {
+          throw err;
+        }
+      } else {
+        throw err;
+      }
+    }
 
     const arrayBuffer = await response.arrayBuffer();
     return new Uint8Array(arrayBuffer);
   }
 
-  private async downloadJS(wasmPath: string, imageRef: string, variant?: string): Promise<string> {
-    // Derive JS path from WASM path (e.g., /pkg/module_bg.wasm -> /pkg/module.js)
-    const jsPath = wasmPath.replace(/_bg\.wasm$/, ".js");
+  async downloadFile(imageRef: string, path: string, variant?: string): Promise<string> {
+    const url = this.buildRegistryUrl();
+    url.searchParams.set("image", imageRef);
+    url.searchParams.set("path", path);
+    if (this.token) {
+      url.searchParams.set("token", this.token);
+    }
+    if (variant) {
+      url.searchParams.set("variant", variant);
+    }
 
+    this.log(`Downloading file from ${this.sanitizeUrlForLogging(url)}`);
+
+    const response = await this.fetchWithRetry(url.toString());
+    return await response.text();
+  }
+
+  private async downloadJS(wasmPath: string, imageRef: string, variant?: string): Promise<string> {
+    const jsPath = wasmPath.replace(/_bg\.wasm$/, ".js");
     const url = this.buildRegistryUrl();
     url.searchParams.set("image", imageRef);
     url.searchParams.set("path", jsPath);
@@ -274,131 +335,15 @@ export class Runtime {
       url.searchParams.set("variant", variant);
     }
 
-    console.log(`[Runtime] Downloading JS glue code from ${this.sanitizeUrlForLogging(url)}`);
+    this.log(`Downloading JS glue code from ${this.sanitizeUrlForLogging(url)}`);
 
     const response = await this.fetchWithRetry(url.toString());
-
     return await response.text();
-  }
-
-  private buildRegistryUrl(): URL {
-    try {
-      return new URL(this.registryProxyUrl);
-    } catch (err) {
-      if (typeof window !== "undefined" && window.location) {
-        return new URL(this.registryProxyUrl, window.location.origin);
-      }
-      throw err;
-    }
   }
 
   // Helper method to make dynamic import testable
   private async importWasmBindgenModule(blobUrl: string): Promise<WasmBindgenModule> {
     return await import(/* @vite-ignore */ blobUrl);
-  }
-
-  private async executeWASM(
-    wasmBytes: Uint8Array,
-    jsCode: string,
-    command: string[],
-    args: string[],
-    env: Array<{ name: string; value: string }>,
-    onLog: (log: string) => void,
-    signal: AbortSignal,
-  ): Promise<void> {
-    // Capture original console methods
-    const originalConsoleLog = console.log;
-    const originalConsoleError = console.error;
-    const originalConsoleWarn = console.warn;
-    const originalConsoleInfo = console.info;
-
-    let inLog = false;
-    const interceptLog = (method: (...methodArgs: unknown[]) => void, ...methodArgs: unknown[]) => {
-      method.apply(console, methodArgs as unknown[]);
-
-      if (inLog) return;
-      inLog = true;
-
-      try {
-        const logMessage = methodArgs
-          .map((arg) => (typeof arg === "object" ? JSON.stringify(arg) : String(arg)))
-          .join(" ");
-
-        // Avoid capturing the error log from reportPodLog itself to prevent loops
-        if (logMessage.includes("[Agent] Failed to report pod status")) {
-          return;
-        }
-
-        onLog(logMessage);
-      } catch {
-        // Ignore errors in logging to prevent infinite loops
-      } finally {
-        inLog = false;
-      }
-    };
-
-    // Override console methods
-    console.log = (...args) => interceptLog(originalConsoleLog, ...args);
-    console.error = (...args) => interceptLog(originalConsoleError, ...args);
-    console.warn = (...args) => interceptLog(originalConsoleWarn, ...args);
-    console.info = (...args) => interceptLog(originalConsoleInfo, ...args);
-
-    console.log("[Runtime] Loading wasm-bindgen JS module...");
-
-    // Create a blob URL from the JS code
-    const blob = new Blob([jsCode], { type: "application/javascript" });
-    const blobUrl = URL.createObjectURL(blob);
-
-    try {
-      // Check for abort signal
-      if (signal.aborted) {
-        throw new Error("Execution aborted");
-      }
-
-      // Dynamically import the JS module
-      const module = await this.importWasmBindgenModule(blobUrl);
-
-      console.log("[Runtime] Initializing wasm-bindgen module...");
-
-      // Call the init function with the WASM bytes
-      // wasm-bindgen modules export a default init function
-      // Use the new API that expects an object with 'module_or_path' key
-      await module.default({ module_or_path: wasmBytes });
-
-      console.log("[Runtime] Running WASM module...");
-
-      // Check for abort signal
-      if (signal.aborted) {
-        throw new Error("Execution aborted");
-      }
-
-      // Call the main function if it exists
-      if (typeof module.main === "function") {
-        // Convert env array to object
-        const envObj: Record<string, string> = {};
-        for (const e of env) {
-          envObj[e.name] = e.value;
-        }
-
-        const result = await module.main(envObj);
-        if (result !== undefined) {
-          onLog(`WASM execution completed with result: ${result}`);
-        }
-      } else {
-        onLog("WASM module initialized successfully (no main function found)");
-      }
-
-      console.log("[Runtime] WASM execution completed");
-    } finally {
-      // Restore original console methods
-      console.log = originalConsoleLog;
-      console.error = originalConsoleError;
-      console.warn = originalConsoleWarn;
-      console.info = originalConsoleInfo;
-
-      // Clean up the blob URL
-      URL.revokeObjectURL(blobUrl);
-    }
   }
 
   private async executeWASI(
@@ -409,28 +354,29 @@ export class Runtime {
     onLog: (log: string) => void,
     signal: AbortSignal,
   ): Promise<void> {
-    console.log("[Runtime] Initializing WASI...");
+    this.log("Initializing WASI...");
+    // WASI/c2w convention: argv[0] is the program name, argv[1:] are the actual arguments.
+    // c2w-generated WASM binaries parse argv[1:] for their own options (like --entrypoint),
+    // then treat the first non-option argument as the COMMAND to run inside the container.
+    // We must prepend a program name placeholder so that the user's command starts at argv[1].
+    const programName = "/wasm";
+    const argsList = [programName, ...command, ...args];
 
-    const argsList = [...command, ...args];
-    const argsMsg = `[Runtime] WASI args: ${JSON.stringify(argsList)}`;
-    console.log(argsMsg);
-    onLog(argsMsg);
-    const envObj: string[] = env.map((e) => `${e.name}=${e.value}`);
+    const normalizedEnv = this.normalizeEnv(env);
+    const envObj: string[] = normalizedEnv.map((e) => `${e.name}=${e.value}`);
 
-    // Use ConsoleStdout.lineBuffered() which is the proper way to handle stdout/stderr
-    // in browser_wasi_shim. The custom LogFile class was causing output to be lost.
     const wasi = new WASI(argsList, envObj, [
       new OpenFile(new WasiFile(new Uint8Array([]))), // stdin
       ConsoleStdout.lineBuffered((line) => {
-        console.log(`[WASI stdout] ${line}`);
         onLog(line);
       }),
       ConsoleStdout.lineBuffered((line) => {
-        console.log(`[WASI stderr] ${line}`);
         onLog(line);
       }),
       new PreopenDirectory("/", new Map()),
     ]);
+
+    this.patchWasiImports(wasi);
 
     try {
       if (signal.aborted) throw new Error("Execution aborted");
@@ -439,11 +385,10 @@ export class Runtime {
         wasi_snapshot_preview1: wasi.wasiImport,
       });
 
-      console.log("[Runtime] Running WASI module...");
+      this.log("Running WASI module...");
 
       if (signal.aborted) throw new Error("Execution aborted");
 
-      // Handle both WebAssemblyInstantiatedSource and Instance return types
       let wasmInstance: WebAssembly.Instance;
       if ("instance" in instance) {
         wasmInstance = (instance as unknown as WebAssembly.WebAssemblyInstantiatedSource).instance;
@@ -455,13 +400,16 @@ export class Runtime {
         wasmInstance as unknown as { exports: { memory: WebAssembly.Memory; _start: () => unknown } },
       );
 
-      onLog(`WASI execution completed with exit code: ${exitCode}`);
-
+      // Log exit code if non-zero
       if (exitCode !== 0) {
+        onLog(`WASI execution completed with exit code: ${exitCode}`);
         throw new Error(`Process exited with code ${exitCode}`);
+      } else {
+        this.log(`WASI execution completed successfully`);
+        onLog(`WASI execution completed successfully`);
       }
     } catch (err) {
-      console.error("[Runtime] WASI execution failed:", err);
+      this.logError(`WASI execution failed: ${err}`);
       onLog(`[Runtime] WASI execution failed: ${err}`);
       if (err instanceof Error && err.stack) {
         onLog(`Stack: ${err.stack}`);
@@ -474,7 +422,281 @@ export class Runtime {
     }
   }
 
-  getRunningPodCount(): number {
-    return this.runningPods.size;
+  // Exposed for testing
+  private patchWasiImports(wasi: WASI): void {
+    // Monkey-patch fd_write to workaround IOV_MAX limit (1024) in browser_wasi_shim
+    const originalFdWrite = wasi.wasiImport.fd_write as (
+      fd: number,
+      iovs_ptr: number,
+      iovs_len: number,
+      nwritten_ptr: number,
+    ) => number;
+
+    wasi.wasiImport.fd_write = (fd: number, iovs_ptr: number, iovs_len: number, nwritten_ptr: number): number => {
+      if (iovs_len <= 1024) {
+        return originalFdWrite(fd, iovs_ptr, iovs_len, nwritten_ptr);
+      }
+
+      let totalWritten = 0;
+      let currentIovsPtr = iovs_ptr;
+      let remainingIovs = iovs_len;
+      // WASM32 iovec is 8 bytes (4 ptr + 4 len)
+      const iovecSize = 8;
+
+      while (remainingIovs > 0) {
+        const batchSize = Math.min(remainingIovs, 1024);
+        const ret = originalFdWrite(fd, currentIovsPtr, batchSize, nwritten_ptr);
+
+        if (ret !== 0) {
+          return ret;
+        }
+
+        // Read how many bytes were written in this batch
+        const mem = wasi.inst.exports.memory as WebAssembly.Memory;
+        const view = new DataView(mem.buffer);
+        const writtenInBatch = view.getUint32(nwritten_ptr, true);
+        totalWritten += writtenInBatch;
+
+        remainingIovs -= batchSize;
+        currentIovsPtr += batchSize * iovecSize;
+      }
+
+      // Write total bytes written back to memory
+      const mem = wasi.inst.exports.memory as WebAssembly.Memory;
+      const view = new DataView(mem.buffer);
+      view.setUint32(nwritten_ptr, totalWritten, true);
+
+      return 0; // ERRNO_SUCCESS
+    };
+
+    // Patch fd_pwrite
+    const originalFdPwrite = wasi.wasiImport.fd_pwrite as (
+      fd: number,
+      iovs_ptr: number,
+      iovs_len: number,
+      offset: bigint,
+      nwritten_ptr: number,
+    ) => number;
+
+    wasi.wasiImport.fd_pwrite = (
+      fd: number,
+      iovs_ptr: number,
+      iovs_len: number,
+      offset: bigint,
+      nwritten_ptr: number,
+    ): number => {
+      if (iovs_len <= 1024) {
+        return originalFdPwrite(fd, iovs_ptr, iovs_len, offset, nwritten_ptr);
+      }
+
+      let totalWritten = 0;
+      let currentIovsPtr = iovs_ptr;
+      let remainingIovs = iovs_len;
+      const iovecSize = 8;
+      let currentOffset = offset;
+
+      while (remainingIovs > 0) {
+        const batchSize = Math.min(remainingIovs, 1024);
+        const ret = originalFdPwrite(fd, currentIovsPtr, batchSize, currentOffset, nwritten_ptr);
+
+        if (ret !== 0) {
+          return ret;
+        }
+
+        const mem = wasi.inst.exports.memory as WebAssembly.Memory;
+        const view = new DataView(mem.buffer);
+        const writtenInBatch = view.getUint32(nwritten_ptr, true);
+        totalWritten += writtenInBatch;
+        currentOffset += BigInt(writtenInBatch);
+
+        remainingIovs -= batchSize;
+        currentIovsPtr += batchSize * iovecSize;
+      }
+
+      const mem = wasi.inst.exports.memory as WebAssembly.Memory;
+      const view = new DataView(mem.buffer);
+      view.setUint32(nwritten_ptr, totalWritten, true);
+
+      return 0;
+    };
+
+    // Patch fd_read
+    const originalFdRead = wasi.wasiImport.fd_read as (
+      fd: number,
+      iovs_ptr: number,
+      iovs_len: number,
+      nread_ptr: number,
+    ) => number;
+
+    wasi.wasiImport.fd_read = (fd: number, iovs_ptr: number, iovs_len: number, nread_ptr: number): number => {
+      if (iovs_len <= 1024) {
+        return originalFdRead(fd, iovs_ptr, iovs_len, nread_ptr);
+      }
+
+      let totalRead = 0;
+      let currentIovsPtr = iovs_ptr;
+      let remainingIovs = iovs_len;
+      const iovecSize = 8;
+
+      while (remainingIovs > 0) {
+        const batchSize = Math.min(remainingIovs, 1024);
+        const ret = originalFdRead(fd, currentIovsPtr, batchSize, nread_ptr);
+
+        if (ret !== 0) {
+          return ret;
+        }
+
+        const mem = wasi.inst.exports.memory as WebAssembly.Memory;
+        const view = new DataView(mem.buffer);
+        const readInBatch = view.getUint32(nread_ptr, true);
+        totalRead += readInBatch;
+
+        if (readInBatch === 0) {
+          break; // EOF or no more data
+        }
+
+        remainingIovs -= batchSize;
+        currentIovsPtr += batchSize * iovecSize;
+      }
+
+      const mem = wasi.inst.exports.memory as WebAssembly.Memory;
+      const view = new DataView(mem.buffer);
+      view.setUint32(nread_ptr, totalRead, true);
+
+      return 0;
+    };
+
+    // Patch fd_pread
+    const originalFdPread = wasi.wasiImport.fd_pread as (
+      fd: number,
+      iovs_ptr: number,
+      iovs_len: number,
+      offset: bigint,
+      nread_ptr: number,
+    ) => number;
+
+    wasi.wasiImport.fd_pread = (
+      fd: number,
+      iovs_ptr: number,
+      iovs_len: number,
+      offset: bigint,
+      nread_ptr: number,
+    ): number => {
+      if (iovs_len <= 1024) {
+        return originalFdPread(fd, iovs_ptr, iovs_len, offset, nread_ptr);
+      }
+
+      let totalRead = 0;
+      let currentIovsPtr = iovs_ptr;
+      let remainingIovs = iovs_len;
+      const iovecSize = 8;
+      let currentOffset = offset;
+
+      while (remainingIovs > 0) {
+        const batchSize = Math.min(remainingIovs, 1024);
+        const ret = originalFdPread(fd, currentIovsPtr, batchSize, currentOffset, nread_ptr);
+
+        if (ret !== 0) {
+          return ret;
+        }
+
+        const mem = wasi.inst.exports.memory as WebAssembly.Memory;
+        const view = new DataView(mem.buffer);
+        const readInBatch = view.getUint32(nread_ptr, true);
+        totalRead += readInBatch;
+        currentOffset += BigInt(readInBatch);
+
+        if (readInBatch === 0) {
+          break; // EOF
+        }
+
+        remainingIovs -= batchSize;
+        currentIovsPtr += batchSize * iovecSize;
+      }
+
+      const mem = wasi.inst.exports.memory as WebAssembly.Memory;
+      const view = new DataView(mem.buffer);
+      view.setUint32(nread_ptr, totalRead, true);
+
+      return 0;
+    };
+  }
+
+  private async executeWASM(
+    wasmBytes: Uint8Array,
+    jsCode: string,
+    command: string[],
+    args: string[],
+    env: Array<{ name: string; value: string }>,
+    onLog: (log: string) => void,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const originalConsoleLog = console.log;
+    const originalConsoleError = console.error;
+    const originalConsoleWarn = console.warn;
+    const originalConsoleInfo = console.info;
+
+    let inLog = false;
+    const interceptLog = (method: (...methodArgs: unknown[]) => void, ...methodArgs: unknown[]) => {
+      method.apply(console, methodArgs as unknown[]);
+      if (inLog) return;
+      inLog = true;
+      try {
+        const logMessage = methodArgs
+          .map((arg) => (typeof arg === "object" ? JSON.stringify(arg) : String(arg)))
+          .join(" ");
+        if (!logMessage.includes("[Agent] Failed to report pod status")) {
+          onLog(logMessage);
+        }
+      } catch {
+        // Ignore logging errors to prevent infinite loops
+      } finally {
+        inLog = false;
+      }
+    };
+
+    console.log = (...args) => interceptLog(originalConsoleLog, ...args);
+    console.error = (...args) => interceptLog(originalConsoleError, ...args);
+    console.warn = (...args) => interceptLog(originalConsoleWarn, ...args);
+    console.info = (...args) => interceptLog(originalConsoleInfo, ...args);
+
+    this.log("Loading wasm-bindgen JS module...");
+
+    const blob = new Blob([jsCode], { type: "application/javascript" });
+    const blobUrl = URL.createObjectURL(blob);
+
+    try {
+      if (signal.aborted) throw new Error("Execution aborted");
+
+      const module = await this.importWasmBindgenModule(blobUrl);
+
+      this.log("Initializing wasm-bindgen module...");
+
+      await module.default({ module_or_path: wasmBytes });
+
+      this.log("Running WASM module...");
+
+      if (signal.aborted) throw new Error("Execution aborted");
+
+      if (typeof module.main === "function") {
+        const envObj: Record<string, string> = {};
+        const normalizedEnv = this.normalizeEnv(env);
+        for (const e of normalizedEnv) {
+          envObj[e.name] = e.value;
+        }
+        await module.main(envObj);
+      } else {
+        this.log("WASM module initialized successfully (no main function found)");
+        onLog("WASM module initialized successfully (no main function found)");
+      }
+
+      this.log("WASM execution completed");
+    } finally {
+      console.log = originalConsoleLog;
+      console.error = originalConsoleError;
+      console.warn = originalConsoleWarn;
+      console.info = originalConsoleInfo;
+      URL.revokeObjectURL(blobUrl);
+    }
   }
 }

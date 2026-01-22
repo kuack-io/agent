@@ -2,7 +2,10 @@ import { Runtime, type PodSpec, type PodStatus } from "./runtime";
 
 // Define message types for type safety
 type WorkerMessage =
-  | { type: "init"; payload: { registryProxyUrl: string; token: string } }
+  | {
+      type: "init";
+      payload: { registryProxyUrl: string; token: string };
+    }
   | { type: "execute_pod"; payload: PodSpec }
   | { type: "delete_pod"; payload: { namespace: string; name: string } }
   | { type: "get_status" };
@@ -26,6 +29,18 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
           throw new Error("Runtime not initialized");
         }
         const podSpec = msg.payload;
+        const sendStatusUpdate = () => {
+          if (!runtime) {
+            return;
+          }
+          self.postMessage({
+            type: "status_update",
+            payload: {
+              runningPods: runtime.getRunningPodCount(),
+              executedPods: runtime.getExecutedPodCount(),
+            },
+          });
+        };
         // We don't await here to allow concurrent handling if needed,
         // though JS is single threaded, async operations (fetches) allow interleaving.
         // However, we should probably catch errors.
@@ -41,6 +56,7 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
                   status,
                 },
               });
+              sendStatusUpdate();
             },
             (log: string) => {
               self.postMessage({
@@ -66,6 +82,7 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
                 },
               },
             });
+            sendStatusUpdate();
           });
         break;
       }
