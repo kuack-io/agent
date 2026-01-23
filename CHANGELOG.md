@@ -1,3 +1,10 @@
+## [1.5.1](https://github.com/kuack-io/agent/compare/1.5.0...1.5.1) (2026-01-23)
+
+### Dependencies
+
+* **deps-dev:** bump @trivago/prettier-plugin-sort-imports ([048c7c5](https://github.com/kuack-io/agent/commit/048c7c55baf1abc9d149e3434c61f3a0aff0533a))
+* **deps-dev:** bump @typescript-eslint/eslint-plugin ([46a29a2](https://github.com/kuack-io/agent/commit/46a29a2c4cb3d04ffc4a05a966a7769041961314))
+
 ## [1.5.0](https://github.com/kuack-io/agent/compare/1.4.0...1.5.0) (2026-01-23)
 
 ### Features
