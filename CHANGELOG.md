@@ -1,3 +1,21 @@
+## [1.5.0](https://github.com/kuack-io/agent/compare/1.4.0...1.5.0) (2026-01-23)
+
+### Features
+
+* implement worker ([3915588](https://github.com/kuack-io/agent/commit/39155889c8ead4713dd62c2fb8a07c0ddbe6552a))
+* worker ([1b0ad8c](https://github.com/kuack-io/agent/commit/1b0ad8c2ef68d6ee10c10042699e45b1b255f092))
+
+### Bug Fixes
+
+* flacky test ([c50b1c9](https://github.com/kuack-io/agent/commit/c50b1c923c4633d99c5674f95cad61bd5cb29e93))
+
+### Dependencies
+
+* **deps-dev:** bump @types/node from 25.0.3 to 25.0.5 ([7be181f](https://github.com/kuack-io/agent/commit/7be181f2844d269981ee235d2a3cd1cc67f84bbb))
+* **deps-dev:** bump @typescript-eslint/parser from 8.51.0 to 8.52.0 ([e2a8f44](https://github.com/kuack-io/agent/commit/e2a8f44094ca1cf987859f650bb5f0950586c06e))
+* **deps-dev:** bump vite from 7.3.0 to 7.3.1 ([7a8e7ef](https://github.com/kuack-io/agent/commit/7a8e7ef8e7d124de26c1e5b6a881ea2f67d5e1ba))
+* **deps:** bump lodash-es from 4.17.21 to 4.17.23 ([40d4e39](https://github.com/kuack-io/agent/commit/40d4e39b2f67fd120a030aefb253189a9dd91a5e))
+
 ## [1.4.0](https://github.com/kuack-io/agent/compare/1.3.6...1.4.0) (2026-01-08)
 
 ### Features
