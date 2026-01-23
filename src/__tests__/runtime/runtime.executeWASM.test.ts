@@ -58,6 +58,38 @@ describe("Runtime executeWASM", () => {
     restore();
   });
 
+  it("deduplicates env before passing to wasm", async () => {
+    const runtimeInternals = env.getRuntimeInternals();
+    const { restore } = setupBlobUrlMocks();
+    const controller = new AbortController();
+
+    const module = {
+      default: vi.fn().mockResolvedValue(undefined),
+      main: vi.fn().mockResolvedValue("OK"),
+    };
+
+    vi.spyOn(runtimeInternals, "importWasmBindgenModule").mockResolvedValue(module);
+
+    const envEntries = Array.from({ length: 130 }, (_, idx) => ({ name: `ENV_${idx}`, value: `v${idx}` }));
+    envEntries.push({ name: "ENV_5", value: "override" });
+
+    await runtimeInternals.executeWASM(
+      new Uint8Array([5]),
+      "export default {}",
+      [],
+      [],
+      envEntries,
+      vi.fn(),
+      controller.signal,
+    );
+
+    const passedEnv = module.main.mock.calls[0][0] as Record<string, string>;
+    expect(passedEnv.ENV_5).toBe("v5");
+    expect(Object.keys(passedEnv).length).toBe(130);
+    expect(passedEnv.ENV_0).toBe("v0");
+    restore();
+  });
+
   it("ignores agent status error logs and does not duplicate them", async () => {
     const runtimeInternals = env.getRuntimeInternals();
     const { restore } = setupBlobUrlMocks();

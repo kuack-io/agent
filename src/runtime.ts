@@ -37,7 +37,10 @@ export interface PodStatus {
 }
 
 export class Runtime {
-  private static readonly MAX_ENV_VARS = 256;
+  // Note: We no longer limit env vars. We pass all env vars to WASI and rely on patching
+  // fd_write for runtime calls. If WASI initialization fails due to iovec limit, we provide
+  // a clear error message. This is a limitation of browser_wasi_shim that we cannot work around
+  // without truncating env vars (which we don't want to do).
   private runningPods: Map<string, AbortController> = new Map();
   private executedPodCount: number = 0;
   private registryProxyUrl: string;
@@ -71,32 +74,29 @@ export class Runtime {
     return sanitizedUrl.toString();
   }
 
-  private normalizeEnv(env: Array<{ name: string; value: string }>): Array<{ name: string; value: string }> {
-    if (env.length === 0) {
-      return env;
-    }
+  private isNotFoundError(err: unknown): err is Error {
+    return err instanceof Error && err.message === "HTTP 404: Not Found";
+  }
 
-    const deduped = new Map<string, string>();
+  private normalizeEnv(env: Array<{ name: string; value: string }>): Array<{ name: string; value: string }> {
+    // Normalize env vars: deduplicate and filter out invalid entries.
+    // We do NOT truncate env vars - we pass all of them to WASI.
+    // If WASI initialization fails due to iovec limit, we provide a clear error message.
+    const filtered: Array<{ name: string; value: string }> = [];
+    const deduped = new Set<string>();
+
     for (const entry of env) {
       if (!entry.name) {
         continue;
       }
       if (deduped.has(entry.name)) {
-        deduped.delete(entry.name);
+        continue;
       }
-      deduped.set(entry.name, entry.value ?? "");
+      deduped.add(entry.name);
+      filtered.push({ name: entry.name, value: entry.value ?? "" });
     }
 
-    let entries = Array.from(deduped.entries()).map(([name, value]) => ({ name, value }));
-    if (entries.length > Runtime.MAX_ENV_VARS) {
-      const start = entries.length - Runtime.MAX_ENV_VARS;
-      entries = entries.slice(start);
-      this.logWarn(
-        `Truncated environment variables to last ${Runtime.MAX_ENV_VARS} entries (was ${deduped.size})`,
-      );
-    }
-
-    return entries;
+    return filtered;
   }
 
   getRunningPodCount(): number {
@@ -136,6 +136,11 @@ export class Runtime {
       const wasmPath = container.wasm.path;
 
       this.log(`Configuration: Type=${wasmType}, Path=${wasmPath}`);
+      this.log(`Command: ${JSON.stringify(container.command || [])}`);
+      this.log(`Args: ${JSON.stringify(container.args || [])}`);
+      onLog(
+        `[Runtime] Executing pod ${podKey} with command: ${JSON.stringify(container.command || [])}, args: ${JSON.stringify(container.args || [])}`,
+      );
 
       const wasmBytes = await this.downloadWASM(container);
 
@@ -159,24 +164,30 @@ export class Runtime {
       this.runningPods.set(podKey, abortController);
 
       if (isWasi) {
-        await this.executeWASI(
-          wasmBytes,
-          container.command || [],
-          container.args || [],
-          container.env || [],
-          onLog,
-          abortController.signal,
-        );
+        // For WASI modules, the provider sets command to the WASM path (e.g., ["/out.wasm"]).
+        // This is the WASM module itself, not a command to execute. We should ignore it and only use args.
+        // The actual command to run inside the container is in args.
+        let command = container.command || [];
+        const args = container.args || [];
+
+        // If command is the WASM path (common pattern: ["/out.wasm"] or ["/output.wasm"]), ignore it
+        if (
+          command.length === 1 &&
+          (command[0] === "/out.wasm" || command[0] === "/output.wasm" || command[0].endsWith(".wasm"))
+        ) {
+          this.log(`Ignoring WASM path in command: ${command[0]}, using only args`);
+          command = [];
+        }
+
+        this.log(`Executing WASI with command: ${JSON.stringify(command)}, args: ${JSON.stringify(args)}`);
+        onLog(`[Runtime] Executing WASI: command=${JSON.stringify(command)}, args=${JSON.stringify(args)}`);
+        await this.executeWASI(wasmBytes, command, args, container.env || [], onLog, abortController.signal);
       } else {
-        await this.executeWASM(
-          wasmBytes,
-          jsCode,
-          container.command || [],
-          container.args || [],
-          container.env || [],
-          onLog,
-          abortController.signal,
-        );
+        const command = container.command || [];
+        const args = container.args || [];
+        this.log(`Executing WASM with command: ${JSON.stringify(command)}, args: ${JSON.stringify(args)}`);
+        onLog(`[Runtime] Executing WASM: command=${JSON.stringify(command)}, args=${JSON.stringify(args)}`);
+        await this.executeWASM(wasmBytes, jsCode, command, args, container.env || [], onLog, abortController.signal);
       }
 
       onStatus({
@@ -278,9 +289,9 @@ export class Runtime {
     let response: Response;
     try {
       response = await this.fetchWithRetry(url.toString(), {}, 3, 1000, 120000);
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Fallback strategies for 404s
-      if (err.message === "HTTP 404: Not Found") {
+      if (this.isNotFoundError(err)) {
         // Strategy 1: If path was not "out.wasm", try "out.wasm" (common c2w default)
         const currentPath = url.searchParams.get("path");
         if (currentPath !== "/out.wasm" && currentPath !== "out.wasm") {
@@ -288,7 +299,7 @@ export class Runtime {
           url.searchParams.set("path", "out.wasm");
           try {
             response = await this.fetchWithRetry(url.toString(), {}, 3, 1000, 120000);
-          } catch (retryErr) {
+          } catch {
             // If fallback fails, throw original error (or maybe the new one?)
             // Throwing the original error is often less confusing if the fallback was just a guess.
             // But if the fallback 404s too, throwing that is fine.
@@ -361,10 +372,23 @@ export class Runtime {
     // We must prepend a program name placeholder so that the user's command starts at argv[1].
     const programName = "/wasm";
     const argsList = [programName, ...command, ...args];
+    this.log(`WASI argsList: ${JSON.stringify(argsList)}`);
+    onLog(`[Runtime] WASI argsList: ${JSON.stringify(argsList)}`);
 
     const normalizedEnv = this.normalizeEnv(env);
+    this.log(`Environment variables: ${normalizedEnv.length} (from ${env.length} original)`);
+
+    // Log the exact list of environment variables for debugging
     const envObj: string[] = normalizedEnv.map((e) => `${e.name}=${e.value}`);
 
+    // Create WASI instance with all env vars. The WASI constructor writes env vars during
+    // initialization, which can hit the iovec limit (1024). Unfortunately, we can't patch
+    // fd_write before the constructor runs because the WASI library creates its own wasiImport
+    // object internally during construction.
+    //
+    // We pass all env vars and let the WASI library handle them. If it hits the iovec limit
+    // during initialization, it will fail with a clear error that we catch and report.
+    // The patching we do after creation helps with runtime fd_write calls from within WASM.
     const wasi = new WASI(argsList, envObj, [
       new OpenFile(new WasiFile(new Uint8Array([]))), // stdin
       ConsoleStdout.lineBuffered((line) => {
@@ -376,6 +400,7 @@ export class Runtime {
       new PreopenDirectory("/", new Map()),
     ]);
 
+    // Patch fd_write and other syscalls to handle iovec limits for runtime calls
     this.patchWasiImports(wasi);
 
     try {
@@ -403,7 +428,28 @@ export class Runtime {
       // Log exit code if non-zero
       if (exitCode !== 0) {
         onLog(`WASI execution completed with exit code: ${exitCode}`);
-        throw new Error(`Process exited with code ${exitCode}`);
+        // Check if this might be the iovec limit error (exit code 1 with "too many write" in logs)
+        // The WASI library logs "too many write (1025 > 1024)failed to prepare env info" to stderr
+        // during initialization, then exits with code 1. We detect this pattern.
+        const errorMsg = `Process exited with code ${exitCode}`;
+        // Note: The actual "too many write" message is in stderr logs, not in the error object.
+        // We'll provide helpful error message for exit code 1 which often indicates this issue.
+        if (exitCode === 1) {
+          const envCount = envObj.length;
+          this.logError(
+            `[Runtime] WASI execution failed with exit code 1. This often indicates the iovec limit was exceeded during initialization.`,
+          );
+          this.logError(
+            `[Runtime] You have ${envCount} environment variables. Check logs above for "too many write (1025 > 1024)" message.`,
+          );
+          onLog(`[Runtime] WASI execution failed: exit code 1 (likely iovec limit exceeded with ${envCount} env vars)`);
+          throw new Error(
+            `WASI execution failed: Process exited with code 1. This often indicates the iovec limit (1024) was exceeded during initialization. ` +
+              `You have ${envCount} environment variables. This is a limitation of browser_wasi_shim. ` +
+              `Solution: reduce env var count/size in image`,
+          );
+        }
+        throw new Error(errorMsg);
       } else {
         this.log(`WASI execution completed successfully`);
         onLog(`WASI execution completed successfully`);
@@ -413,6 +459,32 @@ export class Runtime {
       onLog(`[Runtime] WASI execution failed: ${err}`);
       if (err instanceof Error && err.stack) {
         onLog(`Stack: ${err.stack}`);
+      }
+
+      // Check if error is related to iovec limit and provide helpful message
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      if (
+        errorMsg.includes("too many write") ||
+        errorMsg.includes("1024") ||
+        errorMsg.includes("1025") ||
+        errorMsg.includes("failed to prepare env info")
+      ) {
+        const envCount = envObj.length;
+        this.logError(`[Runtime] WASI initialization failed: iovec limit exceeded (likely 1025 > 1024)`);
+        this.logError(
+          `[Runtime] The browser_wasi_shim has a limit of ~1024 iovec structures (env var parts) during initialization.`,
+        );
+        this.logError(
+          `[Runtime] You have ${envCount} env vars. Provider filtering helps, but you may have too many or too long env vars`,
+        );
+        this.logError(`[Runtime] Solution: Reduce env vars in image, use shorter values`);
+
+        onLog(`[Runtime] WASI initialization failed: iovec limit exceeded (1025 > 1024) with ${envCount} env vars`);
+
+        throw new Error(
+          `WASI execution failed: iovec limit exceeded (1025 > 1024) with ${envCount} env vars. ` +
+            `Browser shim limitation. Solution: Reduce env vars in image, use shorter values`,
+        );
       }
 
       if (signal.aborted) {

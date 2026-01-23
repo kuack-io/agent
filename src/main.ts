@@ -123,6 +123,11 @@ class Agent {
   }
 
   private async reportPodStatus(namespace: string, name: string, status: unknown): Promise<void> {
+    const statusObj = status as { phase?: string; message?: string };
+    console.log(
+      `[Agent] Pod ${namespace}/${name} status: ${statusObj.phase || "unknown"} - ${statusObj.message || ""}`,
+    );
+
     const message: Message = {
       type: "pod_status",
       timestamp: new Date().toISOString(),
@@ -141,6 +146,8 @@ class Agent {
   }
 
   private async reportPodLog(namespace: string, name: string, log: string): Promise<void> {
+    console.log(`[Agent] Pod ${namespace}/${name}: ${log}`);
+
     const message: Message = {
       type: "pod_logs",
       timestamp: new Date().toISOString(),
