@@ -100,11 +100,13 @@ describe("Runtime WASI limits", () => {
 
   it("patches fd_pwrite to handle large iovec arrays by chunking", () => {
     const runtime = env.getRuntimeInternals();
-    const originalFdPwriteStub = vi.fn().mockImplementation(
-      (_fd: number, _iovs_ptr: number, _iovs_len: number, _offset: bigint, _nwritten_ptr: number) => {
-        return 0; // SUCCESS
-      },
-    );
+    const originalFdPwriteStub = vi
+      .fn()
+      .mockImplementation(
+        (_fd: number, _iovs_ptr: number, _iovs_len: number, _offset: bigint, _nwritten_ptr: number) => {
+          return 0; // SUCCESS
+        },
+      );
 
     const mockMemory = { buffer: new ArrayBuffer(1024) };
     const mockWasi = {

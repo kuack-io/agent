@@ -103,7 +103,7 @@ describe("Runtime executeWASI", () => {
     } as unknown as WebAssembly.Instance);
 
     await expect(runtimeInternals.executeWASI(wasmBytes, [], [], [], onLog, controller.signal)).rejects.toThrow(
-      "Process exited with code 1",
+      "WASI execution failed: iovec limit exceeded",
     );
 
     expect(onLog).toHaveBeenCalledWith("WASI execution completed with exit code: 1");
